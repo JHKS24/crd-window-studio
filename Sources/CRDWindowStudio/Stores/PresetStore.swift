@@ -10,6 +10,8 @@ final class PresetStore: ObservableObject {
     /// A one-time note (for example an unreadable file that was moved aside) or the last error.
     @Published var notice: String?
     @Published private(set) var loaded = false
+    /// True while the first read runs off the main thread; the preset actions wait for it.
+    @Published private(set) var loading = false
 
     init(repository: PresetRepository) { self.repository = repository }
 
@@ -22,6 +24,31 @@ final class PresetStore: ObservableObject {
         catch { notice = error.localizedDescription }
         loaded = true
     }
+    /// Reads the preset list once, off the main thread, so a configuration lock held elsewhere
+    /// never stalls the window. The same locked read and recovery as `reload()`; the result,
+    /// the set-aside notice or the error is published on the main actor. Calls while a read
+    /// is running join it. A list that `reload()` loaded in the meantime is kept, and only the
+    /// read's set-aside notice is added.
+    func loadIfNeeded() {
+        guard !loaded, !loading else { return }
+        loading = true
+        let repository = repository
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<PresetRepository.Loaded, LoadFailure> in
+                do { return .success(try repository.load()) } catch { return .failure(LoadFailure(message: error.localizedDescription)) }
+            }.value
+            loading = false
+            switch result {
+            case .success(let read):
+                report(movedAside: read.movedAside, partial: read.partial)
+                if !loaded { presets = read.presets }
+            case .failure(let failure):
+                if !loaded { notice = failure.message }
+            }
+            loaded = true
+        }
+    }
+    private struct LoadFailure: Error { let message: String }
     /// Shows the one notice for a file the repository had to set aside, whichever call found it.
     private func report(_ loaded: PresetRepository.Loaded) -> PresetRepository.Loaded {
         report(movedAside: loaded.movedAside, partial: loaded.partial)

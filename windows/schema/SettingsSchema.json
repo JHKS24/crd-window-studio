@@ -29,6 +29,7 @@
     "showDot": true,
     "text": "",
     "buttonText": "공유 중지",
+    "stopStyle": "red",
     "showHandle": true,
     "handlePosition": "leading",
     "handleSize": 14,
@@ -204,6 +205,16 @@
       {
         "id": "top",
         "title": "위쪽"
+      }
+    ],
+    "stopStyle": [
+      {
+        "id": "red",
+        "title": "빨간 버튼"
+      },
+      {
+        "id": "gray",
+        "title": "회색 버튼"
       }
     ]
   },

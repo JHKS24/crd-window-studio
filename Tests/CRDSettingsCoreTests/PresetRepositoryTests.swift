@@ -100,7 +100,8 @@ final class PresetRepositoryTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: file).write(to: presets.url)
         let original = try Data(contentsOf: presets.url)
         let loaded = try presets.load()
-        XCTAssertEqual(loaded.presets, [Preset(id: "a", name: "Kept", values: ["width": .number(300), "showDot": .bool(false)])])
+        // A preset without stopStyle reads as the red Stop it was saved with; no other key is filled.
+        XCTAssertEqual(loaded.presets, [Preset(id: "a", name: "Kept", values: ["width": .number(300), "showDot": .bool(false), "stopStyle": .string("red")])])
         // The partly unreadable file keeps its exact bytes aside before the readable presets are written back.
         XCTAssertTrue(loaded.partial)
         XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(loaded.movedAside)), original)

@@ -1,7 +1,7 @@
 import CRDSettingsCore
 
-/// The two ways to shrink the expanded window back to the status dot, stored in the
-/// single key `stopRevealSeconds`: 0 is "until I shrink it", 1 to 30 is "automatically after N seconds".
+/// The two ways to hide again the Stop Sharing button that a double-click shows on any shape, stored
+/// in the single key `stopRevealSeconds`: 0 is "until I hide it", 1 to 30 is "automatically after N seconds".
 enum ShrinkSetting {
     static let key = "stopRevealSeconds"
     static let manualValue: Double = 0

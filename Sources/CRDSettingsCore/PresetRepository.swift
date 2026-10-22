@@ -33,6 +33,8 @@ public struct PresetRepository: Sendable {
     public static let fileSchema = 1
     /// A preset never holds these: the file version, the switch, the display mode and logging.
     public static let excludedKeys: Set<String> = ["schema", "enabled", "mode", "loggingEnabled"]
+    /// The Stop style of a preset that has no stopStyle key: the red Stop every earlier preset was saved with.
+    public static let legacyStopStyle = "red"
 
     /// The presets read from disk and any recovery the read made.
     public struct Loaded: Equatable, Sendable {
@@ -182,7 +184,11 @@ public struct PresetRepository: Sendable {
             }
             guard valid, let checked = try? repository.validatedValues(values) else { dropped = true; continue }
             if checked.count != rawValues.count { dropped = true }
-            presets.append(Preset(id: id, name: name, values: checked))
+            // A preset saved before the Stop style existed was saved with the red Stop. This fills
+            // only that key and is not a dropped entry, so it sets nothing aside.
+            var normalized = checked
+            if normalized["stopStyle"] == nil { normalized["stopStyle"] = .string(legacyStopStyle) }
+            presets.append(Preset(id: id, name: name, values: normalized))
         }
         return (presets, dropped)
     }

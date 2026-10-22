@@ -197,6 +197,78 @@ final class WindowControlsTests: XCTestCase {
         XCTAssertNil(store.presets.notice, "The moved file is reported once")
     }
 
+    /// A full preset saved before the Stop style existed loads as the red Stop: it does not match a
+    /// gray window, applying it sets red, and the read sets nothing aside. An explicit gray preset keeps gray.
+    @MainActor func testPresetWithoutStopStyleLoadsAndAppliesAsRed() throws {
+        let (store, repository, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let presets = PresetRepository(configuration: repository)
+        var older: [String: Any] = [:]
+        for key in presets.storedKeys where key != "stopStyle" {
+            switch store.values[key] {
+            case .string(let v): older[key] = v
+            case .number(let v): older[key] = v
+            case .bool(let v): older[key] = v
+            default: break
+            }
+        }
+        var gray = older; gray["stopStyle"] = "gray"
+        let file: [String: Any] = ["schema": 1, "presets": [["id": "older", "name": "Before styles", "values": older], ["id": "gray", "name": "Gray", "values": gray]]]
+        let url = directory.appendingPathComponent("presets.json")
+        try JSONSerialization.data(withJSONObject: file).write(to: url)
+        let bytes = try Data(contentsOf: url)
+        store.set("stopStyle", .string("gray")); store.flush()
+        store.presets.reload()
+        XCTAssertNil(store.presets.notice)
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "the read writes nothing back")
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains { $0.hasPrefix("presets-corrupt-") })
+        let olderPreset = try XCTUnwrap(store.presets.presets.first { $0.id == "older" })
+        let grayPreset = try XCTUnwrap(store.presets.presets.first { $0.id == "gray" })
+        XCTAssertEqual(olderPreset.values["stopStyle"], .string("red"))
+        XCTAssertEqual(olderPreset.values.count, older.count + 1, "no other key is filled")
+        XCTAssertEqual(grayPreset.values["stopStyle"], .string("gray"))
+        XCTAssertFalse(store.presets.isCurrent(olderPreset, in: store))
+        XCTAssertTrue(store.presets.isCurrent(grayPreset, in: store))
+        XCTAssertTrue(store.presets.apply(olderPreset, to: store))
+        var saved = try repository.load()
+        XCTAssertEqual(saved["stopStyle"], .string("red"))
+        XCTAssertEqual(saved["mode"], .string("original")); XCTAssertEqual(saved["enabled"], .bool(false))
+        XCTAssertTrue(store.presets.apply(grayPreset, to: store))
+        saved = try repository.load()
+        XCTAssertEqual(saved["stopStyle"], .string("gray"))
+        XCTAssertEqual(saved["mode"], .string("original")); XCTAssertEqual(saved["enabled"], .bool(false))
+        XCTAssertNil(store.presets.notice)
+    }
+
+    /// The first read waits for the configuration lock off the main thread: the main thread keeps
+    /// running, a second call joins the same read, and the result and its notice arrive once.
+    @MainActor func testFirstPresetReadWaitsForTheLockOffTheMainThread() async throws {
+        let (store, repository, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file: [String: Any] = ["schema": 1, "presets": [["id": "a", "name": "Kept", "values": ["width": 300]], ["id": "b", "name": "Bad", "values": ["width": -1]]]]
+        try JSONSerialization.data(withJSONObject: file).write(to: directory.appendingPathComponent("presets.json"))
+        let lock = open(repository.url.appendingPathExtension("lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        XCTAssertTrue(lock >= 0 && flock(lock, LOCK_EX) == 0)
+        let presets = store.presets
+        presets.loadIfNeeded(); presets.loadIfNeeded()
+        XCTAssertTrue(presets.loading)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(presets.loading, "the read is still waiting for the lock")
+        XCTAssertFalse(presets.loaded)
+        XCTAssertEqual(presets.presets, [])
+        flock(lock, LOCK_UN); close(lock)
+        let deadline = Date().addingTimeInterval(5)
+        while !presets.loaded && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(presets.loaded); XCTAssertFalse(presets.loading)
+        XCTAssertEqual(presets.presets.map(\.name), ["Kept"])
+        XCTAssertEqual(presets.notice, L10n.text("프리셋 파일의 일부를 읽을 수 없어 기존 파일을 따로 보관하고, 정상적인 프리셋만 불러왔습니다."))
+        let copies = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix("presets-corrupt-") }
+        XCTAssertEqual(copies.count, 1, "both calls share one read")
+        presets.notice = nil
+        presets.loadIfNeeded()
+        XCTAssertFalse(presets.loading, "a loaded list is not read again")
+    }
+
     func testPreviewSavesOnlyTheUsersOwnMovesAndResizes() {
         XCTAssertTrue(PreviewWindowController.isUserGesture(liveResize: true, pressStartedInWindow: false, buttonDown: true), "An edge drag")
         XCTAssertTrue(PreviewWindowController.isUserGesture(liveResize: false, pressStartedInWindow: true, buttonDown: true), "A title-bar drag")

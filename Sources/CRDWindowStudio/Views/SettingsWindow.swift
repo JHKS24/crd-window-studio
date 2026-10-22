@@ -146,7 +146,8 @@ struct ConfigProblemBanner: View {
 
 extension View {
     /// Helper command failures: one plain title, the coded problem as the message,
-    /// and the controller's diagnostic text behind a copy button.
+    /// and the controller's diagnostic text behind a copy button. Missing developer tools
+    /// add a button that opens Apple's installer for them.
     func companionErrorAlert(_ companion: CompanionService) -> some View {
         modifier(CompanionErrorAlert(companion: companion))
     }
@@ -161,6 +162,10 @@ private struct CompanionErrorAlert: ViewModifier {
     func body(content: Content) -> some View {
         content.alert(L10n.text("창 도우미 작업을 완료하지 못했습니다"),
                       isPresented: Binding(get: { CompanionService.shouldAlert(companion.alertKey, dismissed: dismissed) }, set: { if !$0 { dismiss() } })) {
+            if companion.errorCode == DeveloperTools.missingCode {
+                // `xcode-select --install` opens Apple's installer; the user confirms there.
+                Button(L10n.text("명령어 라인 개발자 도구 설치")) { DeveloperTools.requestInstall(); dismiss() }
+            }
             Button(L10n.text("확인"), role: .cancel) { dismiss() }
             if let details = companion.errorMessage, !details.isEmpty {
                 Button(L10n.text("자세한 내용 복사")) {

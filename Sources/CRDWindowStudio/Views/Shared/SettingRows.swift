@@ -245,12 +245,13 @@ struct ChoiceRow: View {
 }
 
 /// The display picker. A saved display that is not connected stays listed, marked as shown on the first display.
+/// Snapshots name every display generically, so no real display name reaches a rendered image.
 struct DisplayRow: View {
     @ObservedObject var store: SettingsStore
     var body: some View {
         Picker(L10n.text("디스플레이"), selection: Binding(get: { Int(store.number("screen")) }, set: { store.set("screen", .number(Double($0))) })) {
             ForEach(Array(store.screens.enumerated()), id: \.offset) { index, screen in
-                Text(L10n.format("%@. %@", index + 1, screen.localizedName)).tag(index)
+                Text(L10n.format("%@. %@", index + 1, AppRuntime.renderingSnapshots ? L10n.text("디스플레이") : screen.localizedName)).tag(index)
             }
             if Int(store.number("screen")) >= store.screens.count {
                 Text(L10n.format("디스플레이 %@(연결 안 됨, 첫 번째 디스플레이에 표시)", Int(store.number("screen")) + 1)).tag(Int(store.number("screen")))

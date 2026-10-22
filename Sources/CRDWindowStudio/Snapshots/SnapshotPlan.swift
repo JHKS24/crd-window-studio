@@ -32,13 +32,13 @@ import SwiftUI
         jobs.append(.init(page: "display", state: "invalid-config", fixture: .running, themes: [false], languages: ["ko", "en"], rawConfig: "{ not json"))
         for page in ["position", "appearance"] { jobs.append(.init(page: page, state: "default", fixture: .running)) }
         jobs.append(.init(page: "appearance", state: "dot", fixture: .running, config: dotConfig, themes: [false]))
-        // The lock toggles, the auto-shrink row and the presets section, whole pages in both languages.
+        // The lock toggles with the hide row set to Automatically (5 seconds), and the presets section, whole pages in both languages.
         jobs.append(.init(page: "position", state: "locked", fixture: .running, config: ["draggable": .bool(false), "resizable": .bool(false)],
                           size: NSSize(width: 820, height: 1100), languages: ["ko", "en"]))
         jobs.append(.init(page: "appearance", state: "presets", fixture: .running, config: smallDotConfig, size: NSSize(width: 820, height: 1700),
                           languages: ["ko", "en"], presets: [("Small dot", [:]), ("Wide bar", wideBar)]))
-        // The two ways to shrink; "presets" above shows Until I Shrink It (0), this one Automatically (5 seconds).
-        jobs.append(.init(page: "appearance", state: "shrink-automatic", fixture: .running, config: dotConfig, size: NSSize(width: 820, height: 1100),
+        // The other way to hide the Stop Sharing button: Until I Hide It (0).
+        jobs.append(.init(page: "position", state: "hide-manual", fixture: .running, config: ["stopRevealSeconds": .number(0)], size: NSSize(width: 820, height: 1100),
                           languages: ["ko", "en"]))
         jobs.append(.init(page: "appearance", state: "presets-empty", fixture: .running, size: NSSize(width: 820, height: 900), themes: [false]))
         jobs.append(.init(page: "display", state: "running", fixture: .running, themes: [false], languages: ["en"]))
@@ -48,6 +48,11 @@ import SwiftUI
         jobs.append(.init(page: "helper", state: "full", fixture: .running, size: NSSize(width: 820, height: 1500), themes: [false]))
         // The helper's own window for each built-in shape.
         jobs.append(.init(page: "sharing", state: "shapes", fixture: .running, size: NSSize(width: 820, height: 500), chrome: false))
+        jobs.append(.init(page: "sharing", state: "shapes-gray", fixture: .running, config: ["stopStyle": .string("gray")],
+                          size: NSSize(width: 820, height: 500), languages: ["ko", "en"], chrome: false))
+        // The Stop style row next to the Stop label, with the grey style chosen.
+        jobs.append(.init(page: "appearance", state: "stop-style-gray", fixture: .running, config: ["stopStyle": .string("gray")],
+                          size: NSSize(width: 820, height: 1700), languages: ["ko", "en"]))
         // The real-size preview window with its save note under the title.
         jobs.append(.init(page: "preview", state: "bar", fixture: .running, size: previewSize))
         jobs.append(.init(page: "preview", state: "border-nohandle", fixture: .running,
@@ -89,7 +94,7 @@ import SwiftUI
     /// The view a job renders: a settings page, the preview, the shape gallery or the contrast check.
     static func view(for job: SnapshotJob, fixture: SnapshotFixture) -> AnyView {
         switch job.page {
-        case "sharing": return AnyView(HelperShapeGallery(schema: fixture.store.schema))
+        case "sharing": return AnyView(HelperShapeGallery(schema: fixture.store.schema, stopStyle: fixture.store.string("stopStyle")))
         case "preview": return AnyView(HelperWindowPreview(store: fixture.store).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading))
         case "contrast": return AnyView(ContrastCheck(companion: fixture.companion, store: fixture.store))
         default:

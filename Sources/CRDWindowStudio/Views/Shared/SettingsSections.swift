@@ -121,15 +121,17 @@ struct LockToggle: View {
     }
 }
 
-/// The two locks and keeping the window above other windows.
+/// The two locks, keeping the window above other windows, and how the Stop Sharing button that a
+/// double-click shows on any shape is hidden again.
 struct BehaviorRows: View {
     @ObservedObject var store: SettingsStore
     var body: some View {
         LockToggle(lock: .position, store: store)
         LockToggle(lock: .size, store: store)
         ConfigurationToggle(title: L10n.text("다른 창 위에 표시"), key: "alwaysOnTop", store: store)
+        ShrinkRows(store: store)
     }
-    static var footer: String { L10n.text("공유 창의 아무 곳이나 끌어서 옮깁니다. 위치나 크기를 잠그면 끌어서 바꿀 수 없으며, 상태 점을 두 번 클릭해 펼치고 줄이는 동작은 잠금과 관계없이 작동합니다.") }
+    static var footer: String { L10n.text("공유 창의 아무 곳이나 끌어서 옮깁니다. 아무 곳이나 두 번 클릭하면 어떤 모양에서든 공유 중지 버튼이 나타나고, 버튼 밖을 다시 두 번 클릭하면 원래 모양으로 돌아갑니다. 위치나 크기를 잠가도 두 번 클릭은 작동합니다.") }
 }
 
 // MARK: - Appearance
@@ -155,32 +157,33 @@ struct ShapeRows: View {
     static var footer: String { L10n.text("창 모양을 고르면 크기와 표시 항목이 함께 바뀝니다.") }
 }
 
-/// The status dot's color, size, padding and how the expanded window shrinks back.
+/// The status dot's color, size and padding.
 struct DotRows: View {
     @ObservedObject var store: SettingsStore
     var body: some View {
         ColorRow(title: L10n.text("상태 점 색상"), key: "dotColor", store: store)
         DotAppearanceSettingsRows(store: store)
-        ShrinkRows(store: store)
     }
-    static var footer: String { L10n.text("공유 창의 아무 곳이나 두 번 클릭하면 공유 중지 버튼이 나타나고, 다시 두 번 클릭하면 상태 점으로 줄어듭니다. 창 크기를 바꿔도 상태 점은 가운데에 유지됩니다.") }
+    static var footer: String { L10n.text("창 크기를 바꿔도 상태 점은 가운데에 유지됩니다.") }
 }
 
-/// Two ways to shrink the expanded window back to the status dot.
-/// "Until I shrink it" stores 0; "automatically" asks for 1 to 30 seconds right below the choice.
+/// Two ways to hide the Stop Sharing button that a double-click shows, on every shape.
+/// "Until I hide it" stores 0; "automatically" asks for 1 to 30 seconds right below the choice.
 struct ShrinkRows: View {
     @ObservedObject var store: SettingsStore
     var body: some View {
-        Picker(L10n.text("상태 점으로 줄이기"), selection: Binding(get: { store.shrinksAutomatically }, set: { store.setShrinksAutomatically($0) })) {
-            Text(L10n.text("직접 줄일 때까지")).tag(false)
+        Picker(L10n.text("공유 중지 버튼 숨기기"), selection: Binding(get: { store.shrinksAutomatically }, set: { store.setShrinksAutomatically($0) })) {
+            Text(L10n.text("직접 숨길 때까지")).tag(false)
             Text(L10n.text("자동으로")).tag(true)
         }
         .pickerStyle(.segmented)
         if store.shrinksAutomatically {
-            NumberRow(title: L10n.text("줄이기 전 대기 시간"), key: ShrinkSetting.key, store: store, unit: .seconds,
+            NumberRow(title: L10n.text("숨기기 전 대기 시간"), key: ShrinkSetting.key, store: store, unit: .seconds,
                       limits: ShrinkSetting.automaticRange)
         }
     }
+    /// The picker title and its two choices.
+    static var titles: [String] { [L10n.text("공유 중지 버튼 숨기기"), L10n.text("직접 숨길 때까지"), L10n.text("자동으로"), L10n.text("숨기기 전 대기 시간")] }
 }
 
 /// Accent, background and text colors.
@@ -206,7 +209,8 @@ struct DetailRows: View {
     }
 }
 
-/// What the window shows: the dot, and outside the dot layout the text and the Stop button.
+/// What the window shows: the dot, and outside the dot layout the text and the Stop button; and the
+/// Stop button's style, which also applies to the Stop in the capsule.
 struct ContentRows: View {
     @ObservedObject var store: SettingsStore
     var body: some View {
@@ -219,6 +223,8 @@ struct ContentRows: View {
             TextRow(title: L10n.text("공유 중지 버튼 이름"), key: "buttonText", store: store, placeholder: L10n.text("공유 중지"))
                 .disabled(!store.bool("showStopButton"))
         }
+        // Every shape's Stop uses this style, the one in the capsule a double-click opens included.
+        ChoiceRow(title: L10n.text("공유 중지 버튼 모양"), key: "stopStyle", store: store, segmented: true)
     }
     static func footer(_ store: SettingsStore) -> String {
         store.string("layout") == "dot" ? L10n.text("상태 점 배열에서는 상태 점만 보입니다.")

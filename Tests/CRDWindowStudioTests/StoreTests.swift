@@ -104,6 +104,43 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try repository.load()["width"], .number(888))
         XCTAssertEqual(try repository.load()["height"], .number(60))
     }
+    /// Edits made before or while the file was missing reach the disk once it is back, without another
+    /// edit or quitting. An invalid file that comes back instead still waits for the explicit recovery.
+    @MainActor func testEditsKeptWhileTheFileWasMissingAreSavedWhenItReturns() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = ConfigurationRepository(url: directory.appendingPathComponent("config.json"), schema: try .load())
+        try repository.save(["width": .number(440)])
+        let away = directory.appendingPathComponent("config-away.json")
+        let store = SettingsStore(repository: repository)
+        store.set("width", .number(500)) // The 120 ms save has not run yet.
+        try FileManager.default.moveItem(at: repository.url, to: away)
+        store.reload()
+        XCTAssertEqual(store.loadError, .missing)
+        store.set("height", .number(60))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: repository.url.path), "Nothing is written while the file is missing")
+        try FileManager.default.moveItem(at: away, to: repository.url)
+        store.reload()
+        XCTAssertNil(store.loadError)
+        try await Task.sleep(for: .milliseconds(400))
+        let saved = try repository.load()
+        XCTAssertEqual(saved["width"], .number(500), "The disk, not only the window, has the edit")
+        XCTAssertEqual(saved["height"], .number(60))
+        XCTAssertEqual(store.values, saved)
+        XCTAssertNotNil(store.savedAt)
+        // An invalid file that replaces a missing one keeps its bytes; only the explicit recovery replaces it.
+        store.set("width", .number(520))
+        try FileManager.default.removeItem(at: repository.url)
+        store.reload()
+        XCTAssertEqual(store.loadError, .missing)
+        let invalid = Data("{unfinished external edit".utf8)
+        try invalid.write(to: repository.url)
+        store.reload()
+        XCTAssertTrue(store.requiresRecreation)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(try Data(contentsOf: repository.url), invalid)
+    }
     @MainActor func testInvalidFileAtLaunchBlocksEditsAndResetUntilExplicitBackup() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -190,9 +227,9 @@ final class StoreTests: XCTestCase {
         withExtendedLifetime(watcher) {}
     }
     @MainActor func testDisplayFallbackAndBackgroundLaunchPolicy() {
-        XCTAssertEqual(PreviewWindowController.screenIndex(2, count: 2), 0)
-        XCTAssertEqual(PreviewWindowController.screenIndex(1, count: 2), 1)
-        XCTAssertEqual(PreviewWindowController.screenIndex(-1, count: 2), 0)
+        XCTAssertEqual(SettingsStore.screenIndex(2, count: 2), 0)
+        XCTAssertEqual(SettingsStore.screenIndex(1, count: 2), 1)
+        XCTAssertEqual(SettingsStore.screenIndex(-1, count: 2), 0)
         let defaults = FixturePreferences()
         defaults.set(false, forKey: "openSettingsAtLaunch")
         defaults.set(false, forKey: "showPreviewAtLaunch")

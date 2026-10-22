@@ -9,11 +9,14 @@ import SwiftUI
 struct SettingsRoot: View {
     let env: SettingsEnvironment
     @ObservedObject var navigation: SettingsNavigation
+    @StateObject private var pressSelection = SidebarPressSelection()
     init(env: SettingsEnvironment) { self.env = env; navigation = env.navigation }
     var body: some View {
         NavigationSplitView {
-            List(SettingsPage.allCases, selection: Binding(get: { navigation.page }, set: { if let page = $0 { navigation.page = page } })) { page in
+            // The page follows a pressed row at once; the release commits the same page.
+            List(SettingsPage.allCases, selection: Binding(get: { navigation.page }, set: { if let page = $0, page != navigation.page { navigation.page = page } })) { page in
                 Label(page.title, systemImage: page.symbol).tag(page)
+                    .background(SidebarPressTracker(selection: pressSelection, navigation: navigation).accessibilityHidden(true))
             }
             .listStyle(.sidebar)
             .safeAreaInset(edge: .bottom, spacing: 0) { if navigation.page != .display { SidebarStatus(env: env) } }

@@ -78,9 +78,7 @@ final class PreviewWindowController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = store.bool("draggable")
         if store.bool("resizable") { window.styleMask.insert(.resizable) }
         else { window.styleMask.remove(.resizable) }
-        guard !store.screens.isEmpty else { return }
-        let index = Self.screenIndex(Int(store.number("screen")), count: store.screens.count)
-        let screen = store.screens[index]
+        guard let screen = store.selectedScreen else { return }
         let visible = screen.visibleFrame
         let size = CGSize(width: store.number("width"), height: store.number("height"))
         var origin: CGPoint
@@ -115,10 +113,6 @@ final class PreviewWindowController: NSObject, NSWindowDelegate {
     }
     /// External edits always apply; the window's own report waits for the gesture to end.
     nonisolated static func appliesFrame(reportedByWindow: Bool, gestureActive: Bool) -> Bool { !(reportedByWindow && gestureActive) }
-    /// The requested screen index, or 0 when that screen does not exist.
-    static func screenIndex(_ requested: Int, count: Int) -> Int {
-        (0..<count).contains(requested) ? requested : 0
-    }
     /// Only a move or resize made by the user's own gesture is saved: an edge drag
     /// (live resize) or a title-bar drag (a press that began in this window and is still held).
     /// Sizes are not evidence either way. System and programmatic changes are undone instead.

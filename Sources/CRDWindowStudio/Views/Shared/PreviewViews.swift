@@ -39,10 +39,7 @@ struct PreviewPane: View {
 struct ScreenMap: View {
     @ObservedObject var store: SettingsStore
     var body: some View {
-        let screens = store.screens
-        let index = min(max(0, Int(store.number("screen"))), max(0, screens.count - 1))
-        let frame = screens.isEmpty ? CGRect(x: 0, y: 0, width: 1920, height: 1080) : screens[index].frame
-        let visible = screens.isEmpty ? CGRect(x: 0, y: 0, width: 1920, height: 1050) : screens[index].visibleFrame
+        let (frame, visible) = Self.display(store.screens.map { (frame: $0.frame, visible: $0.visibleFrame) }, requested: Int(store.number("screen")))
         let window = Self.windowRect(store: store, visible: visible)
         GeometryReader { geometry in
             let scale = min(geometry.size.width / frame.width, geometry.size.height / frame.height)
@@ -70,6 +67,13 @@ struct ScreenMap: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .accessibilityLabel(L10n.text("디스플레이에서의 위치"))
+    }
+    /// The frame and usable area of the display to draw, from each connected display's frames: the saved
+    /// display, or the first one when the saved display is not connected (`SettingsStore.screenIndex`,
+    /// the rule of the helper and the real-size preview), or a 1920 x 1080 stand-in without displays.
+    static func display(_ displays: [(frame: CGRect, visible: CGRect)], requested: Int) -> (frame: CGRect, visible: CGRect) {
+        guard !displays.isEmpty else { return (CGRect(x: 0, y: 0, width: 1920, height: 1080), CGRect(x: 0, y: 0, width: 1920, height: 1050)) }
+        return displays[SettingsStore.screenIndex(requested, count: displays.count)]
     }
     static let minimumMark: CGFloat = 6
     /// The window's mark, at least 6 x 6 pt around the window's center and kept inside the screen.

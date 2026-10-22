@@ -19,8 +19,10 @@ struct PresetRows: View {
 
     var body: some View {
         Group {
+            // Until the first read finishes the empty-list row keeps its place without saying so.
             if presets.presets.isEmpty {
                 Text(L10n.text("저장된 프리셋 없음")).foregroundStyle(.secondary)
+                    .opacity(presets.loaded ? 1 : 0).accessibilityHidden(!presets.loaded)
             }
             ForEach(presets.presets) { preset in
                 PresetRow(preset: preset, current: presets.isCurrent(preset, in: store),
@@ -33,10 +35,10 @@ struct PresetRows: View {
             HStack {
                 Spacer(minLength: 0)
                 Button(L10n.text("현재 창을 프리셋으로 저장")) { name = ""; naming = .new }
-                    .disabled(!presets.canSaveMore || !store.canSave)
+                    .disabled(!presets.loaded || !presets.canSaveMore || !store.canSave)
             }
         }
-        .onAppear { if !presets.loaded { presets.reload() } }
+        .onAppear { presets.loadIfNeeded() }
         .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField(L10n.text("프리셋 이름"), text: $name)
             Button(L10n.text("저장")) { commitName() }

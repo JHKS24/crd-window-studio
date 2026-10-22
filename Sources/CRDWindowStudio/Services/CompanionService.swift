@@ -66,6 +66,8 @@ final class CompanionService: ObservableObject {
     @Published private(set) var accessibilityAllowed: Bool?
     @Published var errorMessage: String?
     @Published private(set) var errorCode: String?
+    /// The last check found no command line developer tools, so no controller command ran.
+    @Published private(set) var developerToolsMissing = false
     /// Counts explicit actions (everything but a status refresh). A new
     /// attempt may alert again with the same error; a passive refresh may not.
     @Published private(set) var attempt = 0
@@ -93,15 +95,23 @@ final class CompanionService: ObservableObject {
     let scriptURL: URL?
     let runtimeIncluded: Bool
     private let execute: @Sendable (URL, Action) throws -> Data
+    /// Whether the command line developer tools are installed; checked before every controller command.
+    private let developerToolsInstalled: @Sendable () -> Bool
 
     /// Finds `companionctl.py` and the helper binary in the app's Backend resources.
-    /// `execute` runs one controller command; tests and snapshots replace it.
+    /// `execute` runs one controller command; tests and snapshots replace it. The system Python needs
+    /// the command line developer tools, checked by `developerTools`; a replaced `execute` does not use
+    /// that Python, so its check passes unless one is given.
     init(bundle: Bundle = .main, script: URL? = nil, includesRuntime: Bool? = nil,
-         execute: @escaping @Sendable (URL, Action) throws -> Data = { try CompanionService.executeCommand(script: $0, action: $1) }) {
+         execute: (@Sendable (URL, Action) throws -> Data)? = nil,
+         developerTools: (@Sendable () -> Bool)? = nil) {
         let backend = bundle.resourceURL?.appendingPathComponent("Backend", isDirectory: true)
         scriptURL = script ?? (backend?.appendingPathComponent("companionctl.py")).flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
         runtimeIncluded = includesRuntime ?? (backend.map { FileManager.default.isExecutableFile(atPath: $0.appendingPathComponent("OverlayAgent").path) } ?? false)
-        self.execute = execute
+        if let developerTools { developerToolsInstalled = developerTools }
+        else if execute == nil { developerToolsInstalled = { DeveloperTools.pythonInstalled() } }
+        else { developerToolsInstalled = { true } }
+        self.execute = execute ?? { try CompanionService.executeCommand(script: $0, action: $1) }
     }
     // MARK: - Derived state
     // What the status allows and how it reads.
@@ -119,9 +129,12 @@ final class CompanionService: ObservableObject {
     var restorationBlocked: Bool { status?.runtime.restorationBlocked == true }
     /// The runtime values were not freshly acknowledged. Absent on older helpers.
     var refreshUnconfirmed: Bool { status?.runtime.refreshConfirmed == false }
-    /// Turn On is possible from an active, off, prepared, restored or rolled-back state, unless restoration is blocked.
+    /// Turn On is possible from an active, off, prepared, restored or rolled-back state, unless restoration is blocked,
+    /// and while the developer tools are missing, when it checks for them again.
     var canEnable: Bool {
-        canManage && !busy && !restorationBlocked && ["active", "not_installed", "prepared", "restored", "rolled_back"].contains(status?.state ?? "")
+        guard canManage, !busy, !restorationBlocked else { return false }
+        if status == nil { return developerToolsMissing }
+        return ["active", "not_installed", "prepared", "restored", "rolled_back"].contains(status?.state ?? "")
     }
     /// Turn Off is possible while the helper is active, switching, failed to clean up, or still loaded.
     var canDisable: Bool {
@@ -163,8 +176,16 @@ final class CompanionService: ObservableObject {
     /// Turns the helper on. With the permission unknown, the permission request (`permissions --prompt`)
     /// runs first, and `install` follows only after it reports the permission granted. A denial
     /// installs nothing; the status then offers the permission action (the existing recovery).
-    /// Every other state installs directly.
+    /// Every other state installs directly. With no status yet, as while the developer tools are
+    /// missing, it checks the status first, as an attempt that alerts, and goes on from the result.
     func turnOn() {
+        guard status != nil else {
+            run(.status, explicit: true) { [weak self] in
+                guard let self, self.status != nil else { return }
+                self.turnOn()
+            }
+            return
+        }
         guard permissionUnknownBeforeInstall else { perform(.install); return }
         perform(.requestPermission) { [weak self] in
             guard let self, self.accessibilityAllowed == true else { return }
@@ -176,14 +197,22 @@ final class CompanionService: ObservableObject {
     /// `completion` runs on the main actor once the action and the status refresh
     /// finish, or right away when the action cannot start.
     func perform(_ action: Action, completion: (@MainActor () -> Void)? = nil) {
+        run(action, explicit: action != .status, completion: completion)
+    }
+    /// `perform` with the attempt rule: an explicit action counts as a new attempt, whose error alerts.
+    /// First the developer tools are checked; without them nothing starts. An explicit action then
+    /// alerts with the install, and a plain status refresh shows the need in the status alone.
+    private func run(_ action: Action, explicit: Bool, completion: (@MainActor () -> Void)?) {
         guard !busy, let scriptURL, action == .status || canManage else { completion?(); return }
         busyAction = action
-        if action != .status { attempt += 1 }
+        if explicit { attempt += 1 }
         errorMessage = nil
         errorCode = nil
-        let execute = self.execute
+        let execute = self.execute, toolsInstalled = developerToolsInstalled
         Task {
             let result = await Task.detached(priority: .userInitiated) {
+                // Without the tools, /usr/bin/python3 would open Apple's install prompt: start nothing.
+                guard toolsInstalled() else { return (CompanionStatus?.none, String?.none, String?.none, String?(DeveloperTools.missingCode), Bool?.none) }
                 var data: Data?, failure: String?, failureCode: String?, permissions: String?, allowed: Bool?
                 do {
                     data = try execute(scriptURL, action)
@@ -215,6 +244,7 @@ final class CompanionService: ObservableObject {
             }.value
             busyAction = nil
             status = result.0 // Never retain stale readiness when the refresh fails.
+            developerToolsMissing = result.3 == DeveloperTools.missingCode
             if let permissions = result.1 { permissionDescription = permissions; accessibilityAllowed = result.4 }
             var details = result.2 ?? ""
             for detail in [result.0?.error, result.0?.cleanupError].compactMap({ $0 }) where !details.contains(detail) {
@@ -222,12 +252,15 @@ final class CompanionService: ObservableObject {
             }
             errorMessage = details.isEmpty ? nil : details
             errorCode = result.3 ?? result.0?.errorCode ?? result.0?.cleanupErrorCode
+            // A refresh that finds the tools missing says so in the status; only an explicit action alerts.
+            if developerToolsMissing && !explicit { errorCode = nil }
             completion?()
         }
     }
     /// The arguments for `python3`: the script path, then the action's arguments.
     nonisolated static func commandArguments(script: URL, action: Action) -> [String] { [script.path] + action.arguments }
-    /// Runs the controller with the system Python and an 80-second limit.
+    /// Runs the controller with the system Python and an 80-second limit; `perform` calls it only
+    /// after the developer tools check passes.
     nonisolated static func executeCommand(script: URL, action: Action) throws -> Data {
         try BoundedProcess.run(executable: URL(fileURLWithPath: "/usr/bin/python3"),
                                arguments: commandArguments(script: script, action: action), timeout: 80)

@@ -36,7 +36,7 @@ final class SettingsStore: ObservableObject {
     private var pendingChanges: [String: ConfigValue] = [:]
     private var hasReadFile = false
     private let inspectHost: @Sendable () -> HostInspection
-    /// The last automatic shrink delay, kept while "until I shrink it" is selected.
+    /// The last automatic hide delay, kept while "until I hide it" is selected.
     private let shrinkMemory: UserDefaults?
     private var rememberedShrink: Double?
 
@@ -101,6 +101,10 @@ final class SettingsStore: ObservableObject {
         values = next
         rememberShrink(from: changes)
         pendingChanges.merge(changes) { _, new in new }
+        scheduleSave()
+    }
+    /// Writes the pending changes about 120 ms from now, in place of a write already scheduled.
+    private func scheduleSave() {
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.flush() }
         pendingSave = work
@@ -127,8 +131,10 @@ final class SettingsStore: ObservableObject {
     }
     /// Reads the file again, keeping any unsaved changes on top. A failed read stops pending saves
     /// and reports the error; an invalid file is never reloaded over, since recovery is explicit.
+    /// When a missing file is back, the changes kept while it was gone are saved again.
     func reload() {
         guard !requiresRecreation else { return } // Recovery is an explicit, backed-up operation.
+        let returning = loadError == .missing
         do {
             var next = try repository.load(allowMissing: !hasReadFile && loadError == nil)
             hasReadFile = hasReadFile || FileManager.default.fileExists(atPath: repository.url.path)
@@ -136,19 +142,30 @@ final class SettingsStore: ObservableObject {
             loadError = nil
             next.merge(pendingChanges) { _, new in new }
             if next != values { values = next; savedAt = Date(); rememberShrink(from: next) }
+            if returning && !pendingChanges.isEmpty { scheduleSave() }
         } catch {
             pendingSave?.cancel(); pendingSave = nil
             loadError = Self.loadFailure(error)
             errorMessage = error.localizedDescription
         }
     }
-    // MARK: - Shrinking the expanded window back to the status dot
+    // MARK: - The display
+    /// The display the helper places its window on: the saved one, or the first display when the saved
+    /// one is not connected (the helper's `screens.firstObject`). Nil only when no display is reported.
+    var selectedScreen: NSScreen? {
+        screens.isEmpty ? nil : screens[Self.screenIndex(Int(number("screen")), count: screens.count)]
+    }
+    /// The requested display index, or 0 (the first display) when that display is not connected.
+    nonisolated static func screenIndex(_ requested: Int, count: Int) -> Int {
+        (0..<count).contains(requested) ? requested : 0
+    }
+    // MARK: - Hiding the Stop Sharing button that a double-click shows
     var shrinksAutomatically: Bool { ShrinkSetting.isAutomatic(values[ShrinkSetting.key]) }
     /// The seconds the automatic way uses: the current, the last remembered, or 5.
     var automaticShrinkSeconds: Double {
         ShrinkSetting.seconds(current: values[ShrinkSetting.key], remembered: rememberedShrink ?? shrinkMemory?.object(forKey: ShrinkSetting.memoryKey) as? Double)
     }
-    /// Switches between the automatic delay and "until I shrink it".
+    /// Switches between the automatic delay and "until I hide it".
     func setShrinksAutomatically(_ automatic: Bool) {
         update([ShrinkSetting.key: .number(automatic ? automaticShrinkSeconds : ShrinkSetting.manualValue)])
     }

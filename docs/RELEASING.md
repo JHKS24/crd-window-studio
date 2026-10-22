@@ -32,3 +32,31 @@ Check the universal architectures, minimum OS, strict code signatures, project i
 - Source builds are ad hoc signed. A downloadable trusted binary is a separate Developer ID signing/notarization workflow; do not describe this source bundle as notarized.
 
 No API key, signing certificate, personal account file, machine log or Google binary belongs in the public tree.
+
+## Build a public DMG
+
+From a clean source checkout on macOS with the build tools in BUILDING.md:
+
+```sh
+python3 scripts/package_dmg.py --output-directory "$HOME/Desktop/CRD-releases"
+```
+
+The script cleans Swift build products in `.build`, then runs `scripts/build.sh --all --universal` with `CRD_SIGN_IDENTITY=-`. It does not install or launch either program. The packaged app records `CRDSigningIdentity=-`, so a helper prepared on another Mac also uses ad hoc signing. This public artifact is separate from any installation signed with a local certificate.
+
+The DMG contains only `CRD Window Studio.app` and an `Applications` link. Its volume is named `CRD Window Studio`; its filename takes `CFBundleShortVersionString` from the app, for example `CRD-Window-Studio-2.0.dmg`. HFS+ with UDZO compression opens on macOS 14. Both executables must contain arm64 and x86_64 slices and target macOS 14.0. Packaging strips debug object-file paths, signs again, checks the payload and strict signatures, verifies the image with `hdiutil`, and writes a `.dmg.sha256` checksum beside it.
+
+Before publishing, mount the result read-only without opening Finder, inspect its contents, and verify the mounted copy:
+
+```sh
+mkdir -p build/dmg-mount
+hdiutil verify "$HOME/Desktop/CRD-releases/CRD-Window-Studio-2.0.dmg"
+hdiutil attach -readonly -nobrowse -mountpoint "$PWD/build/dmg-mount" \
+  "$HOME/Desktop/CRD-releases/CRD-Window-Studio-2.0.dmg"
+codesign --verify --deep --strict "build/dmg-mount/CRD Window Studio.app"
+lipo -archs "build/dmg-mount/CRD Window Studio.app/Contents/MacOS/CRDWindowStudio"
+lipo -archs "build/dmg-mount/CRD Window Studio.app/Contents/Resources/Backend/OverlayAgent"
+spctl --assess --type execute --verbose=4 "build/dmg-mount/CRD Window Studio.app"
+hdiutil detach "$PWD/build/dmg-mount"
+```
+
+Gatekeeper rejection is expected: an ad hoc build has no Developer ID signature or notarization. Record that result; do not describe the download as notarized. The script retains `build/dmg-stage` for inspection and refuses to overwrite an existing image, checksum or staging folder. Move staging and any failed `.partial.dmg` to the Trash before rerunning. Publishing, tagging and uploading remain separate steps.

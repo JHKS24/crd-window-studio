@@ -5,7 +5,7 @@ import SwiftUI
 /// One answer to "does it work right now?" built from the helper status, the
 /// host inspection and the saved mode. Every page shows this same model.
 struct StudioStatus: Equatable {
-    enum Kind: Equatable { case checking, busy, notIncluded, crdMissing, helperOff, permissionNeeded, attention, savingPaused, paused, waiting, working }
+    enum Kind: Equatable { case checking, busy, notIncluded, crdMissing, developerToolsNeeded, helperOff, permissionNeeded, attention, savingPaused, paused, waiting, working }
     enum Action: Equatable { case turnOnHelper, openAccessibility, restartHelper, enableSettings, retryTurnOff, refreshStatus }
     let kind: Kind
     let title: String
@@ -26,12 +26,12 @@ struct StudioStatus: Equatable {
         case nil: return nil
         }
     }
-    var needsAttention: Bool { [.crdMissing, .helperOff, .permissionNeeded, .attention].contains(kind) }
+    var needsAttention: Bool { [.crdMissing, .developerToolsNeeded, .helperOff, .permissionNeeded, .attention].contains(kind) }
 
     /// Builds the status. The checks run in priority order: helper not included, host not yet checked,
-    /// host missing, an action running, no status yet, restoration needed, permission missing,
-    /// helper off or failed to start, unconfirmed refresh, not ready, saving paused, switched off,
-    /// then working or waiting for a remote session.
+    /// host missing, an action running, no status yet (developer tools missing, or still checking),
+    /// restoration needed, permission missing, helper off or failed to start, unconfirmed refresh,
+    /// not ready, saving paused, switched off, then working or waiting for a remote session.
     @MainActor static func make(companion: CompanionService, store: SettingsStore) -> Self {
         if !companion.canManage {
             return .init(kind: .notIncluded, title: L10n.text("창 도우미가 포함되지 않음"),
@@ -58,6 +58,12 @@ struct StudioStatus: Equatable {
             return .init(kind: .busy, title: title, detail: L10n.text("잠시만 기다려 주세요."), symbol: "hourglass", tint: .secondary, action: nil)
         }
         guard let status = companion.status else {
+            // No controller command could start; Turn On checks again and offers the install.
+            if companion.developerToolsMissing {
+                return .init(kind: .developerToolsNeeded, title: L10n.text("명령어 라인 개발자 도구 필요"),
+                             detail: L10n.text("창 도우미를 켜려면 명령어 라인 개발자 도구가 필요합니다. 창 도우미 켜기를 눌러 설치하세요."),
+                             symbol: "wrench.and.screwdriver.fill", tint: .orange, action: .turnOnHelper)
+            }
             return .init(kind: .checking, title: L10n.text("상태 확인 중"), detail: L10n.text("잠시만 기다려 주세요."),
                          symbol: "hourglass", tint: .secondary, action: nil)
         }
@@ -187,7 +193,7 @@ struct HelperFacts {
         if !companion.canManage { helper = L10n.text("포함되지 않음") }
         else if let busy = companion.busyAction, !busy.isCheck {
             helper = busy == .restore ? L10n.text("끄는 중") : L10n.text("켜는 중")
-        } else if status == nil { helper = L10n.text("확인 중") }
+        } else if status == nil { helper = companion.developerToolsMissing ? L10n.text("확인 필요") : L10n.text("확인 중") }
         else if companion.restorationBlocked { helper = L10n.text("확인 필요") }
         else if active && companion.agentReady { helper = L10n.text("켜짐") }
         // Switching is a short start; an active helper that never reports ready can stay that way.
@@ -212,11 +218,12 @@ struct HelperFacts {
 enum HelperDiagnostic: Equatable {
     case permissionRequired, timedOut, busyElsewhere, unexpectedState, configMismatch
     case permissionCheckCleanup, permissionCheckFailed, restorationUnconfirmed, legacyRecord
-    case helperUnverified, hostProblem, fileProblem, wrongUser, general
+    case helperUnverified, hostProblem, fileProblem, wrongUser, developerToolsMissing, general
 
     init(code: String?) {
         switch code {
         case "accessibility_required": self = .permissionRequired
+        case "developer_tools_missing": self = .developerToolsMissing // DeveloperTools.missingCode; set by the app, not the controller
         case "command_timeout", "permission_probe_timeout": self = .timedOut
         case "operation_in_progress": self = .busyElsewhere
         case "helper_already_active", "helper_not_active", "helper_start_unconfirmed", "helper_stop_failed", "install_record_missing":
@@ -250,6 +257,7 @@ enum HelperDiagnostic: Equatable {
         case .hostProblem: return L10n.text("Chrome 원격 데스크톱을 확인하지 못했습니다. 올바르게 설치되어 있는지 확인하세요.")
         case .fileProblem: return L10n.text("필요한 파일을 읽거나 저장하지 못했습니다. 자세한 내용을 확인한 뒤 다시 시도하세요.")
         case .wrongUser: return L10n.text("이 Mac에 로그인한 사용자로 설정 앱을 실행하세요.")
+        case .developerToolsMissing: return L10n.text("창 도우미를 켜려면 명령어 라인 개발자 도구가 필요합니다. 설치를 마친 뒤 창 도우미 켜기를 다시 누르세요.")
         case .general: return L10n.text("창 도우미 작업을 완료하지 못했습니다. 잠시 후 다시 시도하세요.")
         }
     }

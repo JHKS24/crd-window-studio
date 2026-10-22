@@ -12,7 +12,9 @@ The official Google host handles the remote connection. A separate Accessibility
 
 - Native SwiftUI settings with Visibility, Position and Size, Appearance, and Troubleshooting. Korean and English follow the macOS or per-app language setting.
 - Bar, capsule, compact, card, and status-dot layouts; saved position, dimensions, colors, opacity, and corner radius.
-- A status dot with independent dot color, diameter, and surrounding padding. Double-click anywhere on it to expand a centered capsule containing the dot and Stop Sharing button; double-click the capsule outside Stop to shrink it back. Settings offer two ways to shrink it: until you shrink it yourself (stored as `stopRevealSeconds` 0), or automatically after 1 to 30 seconds.
+- A status dot with independent dot color, diameter, and surrounding padding.
+- Double-click anywhere on the sharing window, in any shape, to open a capsule centered on it with the dot and the Stop Sharing button; double-click the capsule outside Stop to return to the window's shape. Settings offer two ways to hide it: until you hide it yourself (stored as `stopRevealSeconds` 0), or automatically after 1 to 30 seconds.
+- Stop Sharing is a pill everywhere the helper draws it, with its label from the Stop Sharing Button Label setting and its colors from the Stop Sharing Button Style setting: Red Button (white text, the default) or Gray Button (red text). Both styles have the same size and press area, and presets save the style. A right-click or a two-finger click opens the window menu; a left click, even with Control held, stays a click.
 - The custom window moves when dragged from anywhere (its own tracking loop, so macOS never tiles or enlarges it) and never takes a system resize. Lock Position and Lock Size are in the settings app and in the helper's right-click and menu bar menus.
 - Presets save the window's look and position in `presets.json` beside `config.json`; apply them from the settings app or the helper's Presets submenu. Applying never changes the display mode or the on/off switch, and a position outside the display it will use is saved clamped inside it. Settings backups copy `presets.json` with the same identifier.
 - Stop Sharing needs its own separate click: any other click or drag on the window, a menu, or a preset that moves Stop keeps it closed for a double-click interval.
@@ -27,6 +29,19 @@ The app offers two display modes: **custom** (the default) and **original**. Fir
 Use this app only on Macs you own or administer, with the knowledge and consent of the people who use them. Follow local law.
 
 The app changes only the local Chrome Remote Desktop notice window. It does not hide the session, the connection, or Google's own controls. The helper also keeps its own menu bar item. To bring the original notice back, choose **Original Sharing Window** under **Display Mode**, or use **Turn Off Window Helper**.
+
+## Download
+
+Download the DMG from the [latest release](https://github.com/JHKS24/crd-window-studio/releases/latest). It runs on macOS 14 or later, on Apple Silicon and Intel.
+
+The app is not from a registered Apple developer, so macOS cannot confirm the publisher and blocks it the first time you open it. Allow it once with the steps below. The whole source is public, so anyone can read it or build it.
+
+1. Open the DMG and drag CRD Window Studio to the Applications folder.
+2. Open the app from the Applications folder. When macOS blocks it, click **Done**, not **Move to Trash**.
+3. Open System Settings > Privacy & Security and scroll down to Security. Next to the message that CRD Window Studio was blocked to protect your Mac, click **Open Anyway**. The button appears for about an hour after you try to open the app.
+4. Click **Open Anyway** once more in the dialog that appears, then enter your Mac login password.
+5. Click **Turn On Window Helper** on the Visibility page. If the command line developer tools are not installed, the app asks you to install them. Install them, then click **Turn On Window Helper** again.
+6. When macOS asks, turn on CRD Window Host in System Settings > Privacy & Security > Accessibility (Device Control and Data Access on macOS 27 and later).
 
 ## Build and try
 
@@ -64,7 +79,7 @@ The controller manages only its own per-user LaunchAgent. Settings persist outsi
 
 CRD updates can change Accessibility structure. When a compatible target cannot be established, the agent preserves or attempts to restore the original indicator instead of guessing. Abrupt termination and revoked permissions can delay restoration; see [recovery](BUILDING.md#recovery-and-removal).
 
-By default, source builds use ad hoc signing, not Developer ID signing or notarization. A local signing identity is opt-in; see [Building](BUILDING.md). This repository does not claim a signed public binary release. The app does not repair CRD input bugs or replace Google's updater.
+By default, source builds use ad hoc signing, not Developer ID signing or notarization. A local signing identity is opt-in; see [Building](BUILDING.md). The app in the release DMG is also ad hoc signed and not notarized. The app does not repair CRD input bugs or replace Google's updater.
 
 ## Data and resource use
 

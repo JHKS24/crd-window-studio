@@ -16,9 +16,9 @@
       "sha256": "05066236ecce98e62ba3269e303df4cb8dea9bd59f7ed1569553e5f6b375330c"
     },
     "CHANGELOG.md": {
-      "bytes": 1177,
+      "bytes": 2034,
       "executable": false,
-      "sha256": "700398da3ed29f9f52fc38674cb61ba12092f0fdb71495a6612985b1e8689b50"
+      "sha256": "c1ab86977fb5aefc8f527452abbd5f1a257fcc8c17de258f27779a43007a7e32"
     },
     "CONTRIBUTING.md": {
       "bytes": 1944,
@@ -41,14 +41,14 @@
       "sha256": "61524f4ea0951566dde7faeebb1c4918bc2aab91e4a37cca91b1e2f713ccd9b1"
     },
     "README.ko.md": {
-      "bytes": 7431,
+      "bytes": 9508,
       "executable": false,
-      "sha256": "f66347597749d7d63b81d99fff487b4108181a84c9fa4ccceb10682b92fffe91"
+      "sha256": "2d44a7e1fb05569633cf04309d9ccf06dfb254bd527a2c834b5e504c449f5bde"
     },
     "README.md": {
-      "bytes": 7494,
+      "bytes": 9257,
       "executable": false,
-      "sha256": "36ce542035a163ffbb97242912265fa102430c95b7a3066c83d5b16eff6dbc08"
+      "sha256": "01eb62e2a05849f12a84002d062a5693b09466f5c702c488d9c531562fca7732"
     },
     "SECURITY.md": {
       "bytes": 1627,
@@ -86,24 +86,24 @@
       "sha256": "4906052ecc523de9c1b6c52cb1a68ba3982bf04ecdc7c3fc0234dbab5e478500"
     },
     "Sources/CRDSettingsCore/PresetRepository.swift": {
-      "bytes": 13114,
+      "bytes": 13596,
       "executable": false,
-      "sha256": "73db6a9ce8a63b27c9d638c7b076a19315eca7306b229763420ee32a78405937"
+      "sha256": "b26176d9f1dfed29814f2c325acffb087af530c70848cdcf5c362fb7de6d771d"
     },
     "Sources/CRDSettingsCore/Resources/Localization/en.json": {
-      "bytes": 27370,
+      "bytes": 28035,
       "executable": false,
-      "sha256": "782bd77cf3735a189fc685baba24e94c5cd7ac0d419e5117c1a3da4091df6bab"
+      "sha256": "f5e84ae12229e29adf2d095a70c03039d40a46538241d2162a69cf4b3a918535"
     },
     "Sources/CRDSettingsCore/Resources/Localization/ko.json": {
-      "bytes": 29729,
+      "bytes": 30475,
       "executable": false,
-      "sha256": "c1741a0dfcac69e7e6d0c0b5e5087142c189f6ab0e4a506ccd6b6a96081dd63b"
+      "sha256": "91940af7ff44da31161e76cd8922700807b31a5aa31f96071c265f995fa9949d"
     },
     "Sources/CRDSettingsCore/Resources/SettingsSchema.json": {
-      "bytes": 5171,
+      "bytes": 5363,
       "executable": false,
-      "sha256": "1e99969fd2235e37976e5e2beaab56b1620dbfb6f51b26c3ce9596dd7dcd3a96"
+      "sha256": "572ef48a38cf57f81eb76296f57c732cd5a34db03e2849252ccdf5c017759a31"
     },
     "Sources/CRDWindowStudio/App/CRDWindowStudioApp.swift": {
       "bytes": 3933,
@@ -116,14 +116,19 @@
       "sha256": "b1003a2de8ae750b8752fa2cf6f3f94925d7c478deda752641a4eabf9eed7ed6"
     },
     "Sources/CRDWindowStudio/Services/CompanionService.swift": {
-      "bytes": 13034,
+      "bytes": 15485,
       "executable": false,
-      "sha256": "801f8f49d5dd4ef45e2aa596fe235931a4900ba0d97b9484354b2b2bbda31709"
+      "sha256": "5a1a25b05567a0115ed3d2dd620cae5bd1a369e13767c19af2f41bc194a77bbb"
+    },
+    "Sources/CRDWindowStudio/Services/DeveloperTools.swift": {
+      "bytes": 1743,
+      "executable": false,
+      "sha256": "212a1ec35800854295921ddb45cc5a42dc3281fd96d7e934ef29e6c1b92a9acf"
     },
     "Sources/CRDWindowStudio/Snapshots/HelperShapeGallery.swift": {
-      "bytes": 4345,
+      "bytes": 6105,
       "executable": false,
-      "sha256": "6d7cdd9dc8170f5ab6acac80f7b4bf994e49ade16ae4e7680efb1131a7048afc"
+      "sha256": "a8a7560a9e105c381b9ed5f63e4742a8103dc54e69cf4431ac80d916bce3c3ba"
     },
     "Sources/CRDWindowStudio/Snapshots/SnapshotFixtures.swift": {
       "bytes": 5548,
@@ -131,9 +136,9 @@
       "sha256": "843cb2e3861439f68e4457061906e3bba36a759bf7b459bc2400a3cc30c07a9d"
     },
     "Sources/CRDWindowStudio/Snapshots/SnapshotPlan.swift": {
-      "bytes": 9512,
+      "bytes": 10104,
       "executable": false,
-      "sha256": "191115a3cfc37e280398506dfe39cab44ef9f5cf294a1b24a7f6ba89571d2efa"
+      "sha256": "814654ebf19d42a4b989e0518778d3465faeb5c271a06671cd80e3672243fc94"
     },
     "Sources/CRDWindowStudio/Snapshots/SnapshotRenderer.swift": {
       "bytes": 9774,
@@ -151,19 +156,19 @@
       "sha256": "b3fbec69d3a1a978e161b9b0700c67457a75fe7f95f425946441c7ca78bf4a34"
     },
     "Sources/CRDWindowStudio/Stores/PresetStore.swift": {
-      "bytes": 4466,
+      "bytes": 5896,
       "executable": false,
-      "sha256": "944ba757f3eb1de003652f84511455ceec2faeb2fd9241425c791c08e9a98cbc"
+      "sha256": "336f3e7c7d9e613b61711ebae5860caa7506f24dc92907855c3abdb28ecbaadb"
     },
     "Sources/CRDWindowStudio/Stores/SettingsStore.swift": {
-      "bytes": 10986,
+      "bytes": 11970,
       "executable": false,
-      "sha256": "b2b02b2c9f94dc6ed854938619f74716a122e36a445a7e099a5fa8d11fab27b4"
+      "sha256": "ea6fe9a8ee859b6aebe7e4217be108aae670f6c6031d581ed66da7f17b0efd43"
     },
     "Sources/CRDWindowStudio/Stores/ShrinkSetting.swift": {
-      "bytes": 1242,
+      "bytes": 1264,
       "executable": false,
-      "sha256": "2d67e96427bcfc61dedef3b8d08a900f0743ea07474054a1fbda9b9211cbbe1d"
+      "sha256": "1681bfcc84788f491bfbdea9dd8a68b3a2bf5f2ed33c5dd4f856509ca6d32f1d"
     },
     "Sources/CRDWindowStudio/Support/AppRuntime.swift": {
       "bytes": 188,
@@ -181,9 +186,14 @@
       "sha256": "87a337005324084e08a4fafff07571d399141e312fd9c8bca2c3815eb4a7f730"
     },
     "Sources/CRDWindowStudio/Support/PreviewWindowController.swift": {
-      "bytes": 9932,
+      "bytes": 9604,
       "executable": false,
-      "sha256": "ba35aff1df9c3efe265c3065166c8e3c4f13cb85405f215f282f0a68671a2208"
+      "sha256": "d7a90392bb075c749a07bd27da59cbca48e900fa657b91d890776e3ebd5aecd4"
+    },
+    "Sources/CRDWindowStudio/Support/SidebarPressSelection.swift": {
+      "bytes": 3561,
+      "executable": false,
+      "sha256": "9db08aea27aab56c4fb99e752d53952c21c330cf8855b9d0ab402f6175a362c7"
     },
     "Sources/CRDWindowStudio/Support/SystemNames.swift": {
       "bytes": 906,
@@ -196,19 +206,19 @@
       "sha256": "87938b9ec1ab3e62b1debeba9723759706247be06691b6c4eaeadab5bd6ebdaa"
     },
     "Sources/CRDWindowStudio/Views/SettingsPages.swift": {
-      "bytes": 10312,
+      "bytes": 10627,
       "executable": false,
-      "sha256": "22f10f11ce9693d1bcd8d88d907a3e267cb73c11fef6ff7229d48a06ac189ff8"
+      "sha256": "414e924ff5d4b395aa5929171f794eed1886d2aca37a49fdd763dc535c32dd13"
     },
     "Sources/CRDWindowStudio/Views/SettingsWindow.swift": {
-      "bytes": 8498,
+      "bytes": 8882,
       "executable": false,
-      "sha256": "13db085f8bc540254cccfc5829d2a0dc0352249a9bad7cc97c3777f5c495c7cf"
+      "sha256": "330d4bd4fe4e3a011c0059cea69170b3d8fdc5e8cac42db307d65689bbb60f2b"
     },
     "Sources/CRDWindowStudio/Views/Shared/HelperWindowPreview.swift": {
-      "bytes": 17214,
+      "bytes": 20460,
       "executable": false,
-      "sha256": "c92bef675ad53eacdc79b275e8e3b77409c38754ff037668a436f7b9b2064855"
+      "sha256": "50670d963b054624d6983f304d1ee933934ce7721344407865c24fed220e5111"
     },
     "Sources/CRDWindowStudio/Views/Shared/PresetPickers.swift": {
       "bytes": 6170,
@@ -216,14 +226,14 @@
       "sha256": "ef3b78c1cfd7080a77e3f690898c2abfd495ba9cf68486a6b4cfb739ea134bf0"
     },
     "Sources/CRDWindowStudio/Views/Shared/PresetRows.swift": {
-      "bytes": 5044,
+      "bytes": 5235,
       "executable": false,
-      "sha256": "25744b85bcf7dea2df203962b681e3e463c996f55940e4172ded7e2de0e96c06"
+      "sha256": "4283ffdffed38882a71fe3a0dca87fa458e928e5a702c5f4a2d1f00b82e9e8a3"
     },
     "Sources/CRDWindowStudio/Views/Shared/PreviewViews.swift": {
-      "bytes": 5807,
+      "bytes": 6284,
       "executable": false,
-      "sha256": "62bebf9b3a844c84b95947c5bcaabc8ed64dfd9c0141ea981de78ef6a3399055"
+      "sha256": "73622545d4c0c59f1381564385a484474aad737c307aeb5f9aa14215c3fbddf9"
     },
     "Sources/CRDWindowStudio/Views/Shared/ProminentButtonStyle.swift": {
       "bytes": 3731,
@@ -231,19 +241,19 @@
       "sha256": "116e558c40472723fb57c3ae2dbb77569d6fbc6e37cbb399597c07c5e51d73a5"
     },
     "Sources/CRDWindowStudio/Views/Shared/SettingRows.swift": {
-      "bytes": 17851,
+      "bytes": 18010,
       "executable": false,
-      "sha256": "36ab9cd99b18439dab3410f2e353730694b856681dbf60e9d87cc65d5d2827b7"
+      "sha256": "5cbeb5a1790d27f4a4d83d8fc55a0660c90b6cf121d7ddedc3b2c9659d1dae63"
     },
     "Sources/CRDWindowStudio/Views/Shared/SettingsSections.swift": {
-      "bytes": 31038,
+      "bytes": 31571,
       "executable": false,
-      "sha256": "c0c0ad0b8a8cfc01eabf789d25829ed9dd6b39bc249bfefcdaea90a05f6fee3e"
+      "sha256": "ad9ebb7edcef28e9a96d3dd61e6c7a5665a9c8db6185a72f8e3b0b1711ee83ba"
     },
     "Sources/CRDWindowStudio/Views/Shared/StudioStatus.swift": {
-      "bytes": 19926,
+      "bytes": 21006,
       "executable": false,
-      "sha256": "75071ebd6d55026e94b85dfc7d96eeab77d781666233920e8756d7df526a8d60"
+      "sha256": "34d80a2ffc018eb0ce87d09ee6ccd024cbb22306d07180d27a5b99585d0acf0a"
     },
     "THIRD_PARTY_NOTICES.md": {
       "bytes": 1954,
@@ -266,14 +276,19 @@
       "sha256": "7cbc817c921df324577715e4e08b07df66783e5c9505e2b609607fd623a2e7d1"
     },
     "Tests/CRDSettingsCoreTests/PresetRepositoryTests.swift": {
-      "bytes": 15593,
+      "bytes": 15725,
       "executable": false,
-      "sha256": "607a43e47d139efe6d0f98866d2460df2d8d9f11e68e188e2ae44bea10ac3283"
+      "sha256": "4866f077653b106d171a86569767cf52dc25e154402681764ba34ebd9b521b67"
     },
     "Tests/CRDSettingsCoreTests/TransactionTests.swift": {
       "bytes": 5586,
       "executable": false,
       "sha256": "f3d563fe01394bbe0dc4f0e9e0a3c4a22ac6e811e6ee48ae490b1ef96e3c252d"
+    },
+    "Tests/CRDWindowStudioTests/DeveloperToolsTests.swift": {
+      "bytes": 10389,
+      "executable": false,
+      "sha256": "8281531ae812ac020e420d412f35fb6cd4c007780a79912f6161072994d75553"
     },
     "Tests/CRDWindowStudioTests/FirstRunPermissionTests.swift": {
       "bytes": 5546,
@@ -281,9 +296,14 @@
       "sha256": "9e57e08957fd758c7918f04914ab908b55fd895211e89de82fb10ab324a36db4"
     },
     "Tests/CRDWindowStudioTests/LayoutAndStyleTests.swift": {
-      "bytes": 5529,
+      "bytes": 19041,
       "executable": false,
-      "sha256": "e93e0d2211474d2308d6bd0fbef9807a0f17107ef8c015d764dae049181dc650"
+      "sha256": "6f99a548895d76d7ad0577fc9f0ebae307ec6e544a4465101a28a45525f018e0"
+    },
+    "Tests/CRDWindowStudioTests/SidebarPressSelectionTests.swift": {
+      "bytes": 3287,
+      "executable": false,
+      "sha256": "4c1f93b22cfafb8fe292d261ae9a5d2657493ba5425797dbe8451770cd9dc651"
     },
     "Tests/CRDWindowStudioTests/StatusAndLifecycleTests.swift": {
       "bytes": 16558,
@@ -291,14 +311,14 @@
       "sha256": "bfbeb40c348b702857b0d601f5f711129726ce89aa5da1005408b3868b726ce9"
     },
     "Tests/CRDWindowStudioTests/StoreTests.swift": {
-      "bytes": 16773,
+      "bytes": 19036,
       "executable": false,
-      "sha256": "55e6d96e0c94daa66eb87cc07143f3b3692c6c40003c6164170d6015907857e8"
+      "sha256": "be567893b2d2a878c7eb203b0df11200880f5838edc18aaa59e92c7866ca5a00"
     },
     "Tests/CRDWindowStudioTests/WindowControlsTests.swift": {
-      "bytes": 14168,
+      "bytes": 18990,
       "executable": false,
-      "sha256": "e343cf2e558ba0f4ba18b2d93cc98303173a06b7d2a2e78f028ea95b5594b6c5"
+      "sha256": "2bdc17110c00b56b8a7b5bc2a2e35e773b67610d3cc5760e42139d901db4d2c0"
     },
     "assets/AppIcon.png": {
       "bytes": 1525940,
@@ -311,9 +331,9 @@
       "sha256": "98180afa257ec48ad74c24834a77298119701e36111b6846416bc4ffbf40b859"
     },
     "backend/OverlayMain.mm": {
-      "bytes": 267862,
+      "bytes": 328257,
       "executable": false,
-      "sha256": "3e325a59f687d91aa2a70ff259b4ee3c69a97fb01194fbb7d4b1b25861d6f4fd"
+      "sha256": "c1b2546959147f25acf1341250188766ec208cf555fca5527e452a7347abbbda"
     },
     "config/custom.json": {
       "bytes": 679,
@@ -321,9 +341,9 @@
       "sha256": "6b841c0d268e13c0b4063de48188f9b877cf3111889cd1e864fae314ebf9334a"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 8831,
+      "bytes": 11041,
       "executable": false,
-      "sha256": "cf98c4cdc46b2f7b8bdae7880d7fa537c4bb92298b442b0803e2de9f9740929f"
+      "sha256": "bb53a0e65878caab04a3110f808b552e29c71e1cdaf9a99cd321816aae10c31f"
     },
     "docs/PRIVACY.md": {
       "bytes": 4109,
@@ -331,19 +351,19 @@
       "sha256": "61285a90799b760d80084735420fc4911695245174c45b073b986d8dc294bd38"
     },
     "docs/RELEASING.md": {
-      "bytes": 2737,
+      "bytes": 4962,
       "executable": false,
-      "sha256": "3790541be5691a4aa63ca92c4145ca8e93659b11b2609363a835531f2a1fc66a"
+      "sha256": "9e4691532689ae79fd8c2eac1b45c885d08a1d104c0126cd686a8fdc933d3859"
     },
     "generated/Localization.h": {
-      "bytes": 57384,
+      "bytes": 58795,
       "executable": false,
-      "sha256": "77efce37a5b1d5342c91f06d34a275617b6c26898a2241e138976e974b8849b6"
+      "sha256": "7431af785d703cd58943dbd3cab299932b675b64f4557318a5e6224532a68025"
     },
     "generated/SettingsSchema.h": {
-      "bytes": 3270,
+      "bytes": 3377,
       "executable": false,
-      "sha256": "d77abc5bfa84eb4595cc8ef97131bd9eb3d18fea5dafa5553c40f3d0914718b8"
+      "sha256": "a0f74a5154da4523fffa801a012f3e5db5c22a2331fb33a9ef753ebd263058ab"
     },
     "reference/LICENSE": {
       "bytes": 1536,
@@ -440,10 +460,15 @@
       "executable": true,
       "sha256": "cdaaf95c3ec6e12b57a663a5fb8f160e4dd281f7ceb1d5550e614d5508eefb73"
     },
+    "scripts/package_dmg.py": {
+      "bytes": 6774,
+      "executable": false,
+      "sha256": "7c07abc2c2e388cb461f85ead4911ee9a12d57200377f7dd80e4c9b6411708ec"
+    },
     "scripts/package_source.py": {
-      "bytes": 6851,
+      "bytes": 6906,
       "executable": true,
-      "sha256": "6ad5b78cdfd4e9cedc9fe208b2a561d1ff247788b63a16d4678ef76bc62ed69d"
+      "sha256": "06942c59a3a68f49167ab92c7b9832db5449733e05aeddf0544c820128d2f283"
     },
     "tests/test_companionctl.py": {
       "bytes": 73954,
@@ -459,6 +484,11 @@
       "bytes": 10937,
       "executable": false,
       "sha256": "f18685656e5e8778eb537a745fea188a9aec81cb6f6a27be6ec7d03a82cda11e"
+    },
+    "tests/test_package_dmg.py": {
+      "bytes": 9483,
+      "executable": false,
+      "sha256": "3d00db691122f09b61d9449715cb433def75926b8cc12678c61ece6f2ada4383"
     },
     "windows/CMakeLists.txt": {
       "bytes": 849,
@@ -481,9 +511,9 @@
       "sha256": "08a743037d4a00cd6ed43fdf50bb0adef81670fee5feccd28eb98c1356f2260b"
     },
     "windows/schema/SettingsSchema.json": {
-      "bytes": 5171,
+      "bytes": 5363,
       "executable": false,
-      "sha256": "1e99969fd2235e37976e5e2beaab56b1620dbfb6f51b26c3ce9596dd7dcd3a96"
+      "sha256": "572ef48a38cf57f81eb76296f57c732cd5a34db03e2849252ccdf5c017759a31"
     },
     "windows/src/WindowProbe.cpp": {
       "bytes": 13705,

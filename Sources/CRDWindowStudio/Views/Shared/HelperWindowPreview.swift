@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Mirrors `Layout()` in backend/OverlayMain.mm so the previews show what the
 /// helper draws: the same frames for the move handle, resize grip (inset from
-/// rounded corners), dot, text and red stop button, the accent-colored border,
+/// rounded corners), dot, text and Stop pill in its style, the accent-colored border,
 /// the one-line text and the "●" glyph. Coordinates follow AppKit (origin
 /// bottom-left) and are flipped on draw.
 struct HelperOverlayLayout {
@@ -49,9 +49,11 @@ struct HelperOverlayLayout {
         let systemFont = NSFont.systemFont(ofSize: font)
         let line = ceil(systemFont.ascender - systemFont.descender) + 4
         let pad = min(12, min(w, h) / 4), gap: CGFloat = 8, dotWidth = max(12, font + 4)
-        let button = Self.stopButtonSize(title: stopTitle, font: font)
+        // The pill's natural size, at least 36 x 24 pt; a short window lowers it to its minimum height.
+        let button = StopPill.size(title: stopTitle, font: font)
         var buttonW = max(36, button.width)
-        let buttonH = max(24, button.height)
+        var buttonH = max(24, button.height)
+        let minimumButtonH = max(24, StopPill.minimumHeight(font: font))
         if dotLayout {
             if b("showDot") { dot = Element(frame: CGRect(x: 0, y: 0, width: w, height: h), visible: true) }
         } else if column {
@@ -59,6 +61,7 @@ struct HelperOverlayLayout {
             // A top handle sits in the top padding instead of adding to it (the helper's Layout()).
             var top = h - (handleTop > 0 ? max(pad, handleTop + 2) : pad)
             let centerX = handleLeft + (w - handleLeft - handleRight) / 2
+            buttonH = max(minimumButtonH, min(buttonH, h - 2 * pad))
             if b("showStopButton") && inner >= 36 && h >= buttonH + 2 * pad {
                 buttonW = min(buttonW, inner)
                 stop = Element(frame: CGRect(x: centerX - buttonW / 2, y: pad, width: buttonW, height: buttonH), visible: true)
@@ -74,9 +77,12 @@ struct HelperOverlayLayout {
         } else {
             var left = pad + handleLeft, right = w - pad - handleRight
             let available = h - handleTop
+            buttonH = max(minimumButtonH, min(buttonH, available))
             // The stop button stays clear of the grip when their heights overlap.
             if resize.visible && (available - buttonH) / 2 < resize.frame.maxY + 1 { right = min(right, resize.frame.minX - 2) }
             if b("showStopButton") && available >= buttonH && right - left >= 36 {
+                // A tight row narrows the pill's side padding before it gives up the dot beside it.
+                if b("showDot") && available >= line { buttonW = min(buttonW, max(StopPill.compactWidth(title: stopTitle, font: font), right - left - dotWidth - gap)) }
                 buttonW = min(buttonW, right - left)
                 stop = Element(frame: CGRect(x: right - buttonW, y: (available - buttonH) / 2, width: buttonW, height: buttonH), visible: true)
                 right -= buttonW + gap
@@ -88,20 +94,6 @@ struct HelperOverlayLayout {
             if b("showText") && available >= line && right - left >= 12 {
                 label = Element(frame: CGRect(x: left, y: (available - line) / 2, width: right - left, height: line), visible: true)
             }
-        }
-    }
-    /// The fitted size of an AppKit rounded button with `title` at `font` points, cached per title and size.
-    @MainActor private static var buttonSizes: [String: CGSize] = [:]
-    static func stopButtonSize(title: String, font: CGFloat) -> CGSize {
-        MainActor.assumeIsolated {
-            let key = "\(font)|\(title)"
-            if let size = buttonSizes[key] { return size }
-            let button = NSButton(title: title, target: nil, action: nil)
-            button.bezelStyle = .rounded
-            button.font = .systemFont(ofSize: font)
-            button.sizeToFit()
-            buttonSizes[key] = button.frame.size
-            return button.frame.size
         }
     }
     /// SwiftUI origin is top-left.
@@ -222,7 +214,7 @@ struct HelperWindowDrawing: View {
             }
             if layout.stop.visible {
                 place(layout.flipped(layout.stop.frame)) {
-                    StopButtonView(title: stopTitle, font: layout.font, dark: scheme == .dark)
+                    StopButtonView(title: stopTitle, font: layout.font, style: string("stopStyle"))
                 }
             }
         }
@@ -272,26 +264,80 @@ private struct ResizeGrip: View {
     }
 }
 
-/// The helper uses an AppKit rounded destructive button with a red title
-/// (StyleStopTitle()). The preview draws the same control; it has no action.
-struct StopButtonView: NSViewRepresentable {
+/// The helper's Stop pill (`StopPillSize()` and the Stop pill section in backend/OverlayMain.mm):
+/// semibold text with 16 pt of padding at each side and 7 pt above and below. The stopStyle
+/// setting picks the colors: "red" is white text on #D93036, "gray" is red text on a grey pill.
+enum StopPill {
+    static let paddingX: CGFloat = 16, paddingY: CGFloat = 7, minimumPaddingX: CGFloat = 10, minimumPaddingY: CGFloat = 2
+    /// #D93036. White text on it measures 4.74:1.
+    static let red = srgb(0xD93036)
+    private static func srgb(_ hex: UInt32) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+    /// A color that resolves to `light` or `dark` with the appearance it is drawn in.
+    private static func dynamic(_ light: UInt32, _ dark: UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
+            srgb(appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light)
+        }
+    }
+    static func isGray(_ style: String) -> Bool { style == "gray" }
+    /// The fill. Red: red, a darker red while pressed, a faded red when disabled. Gray: #DCDCE0 in
+    /// light and #3A3A3C in dark, a step darker while pressed, faded when disabled.
+    static func fill(style: String, enabled: Bool, pressed: Bool = false) -> NSColor {
+        if isGray(style) {
+            let fill = pressed && enabled ? dynamic(0xCDCDD2, 0x2C2C2E) : dynamic(0xDCDCE0, 0x3A3A3C)
+            return enabled ? fill : fill.withAlphaComponent(0.5)
+        }
+        if !enabled { return red.withAlphaComponent(0.38) }
+        return pressed ? srgb(0xB22429) : red
+    }
+    /// The title color. Red: white. Gray: #B0201F in light (5.0:1 on its fill) and #FF8E87 in dark
+    /// (5.1:1), a deeper red while pressed in light. Both fade when Stop is disabled.
+    static func title(style: String, enabled: Bool, pressed: Bool = false) -> NSColor {
+        if isGray(style) {
+            let text = pressed && enabled ? dynamic(0x9E1C16, 0xFF8E87) : dynamic(0xB0201F, 0xFF8E87)
+            return enabled ? text : text.withAlphaComponent(0.45)
+        }
+        return NSColor.white.withAlphaComponent(enabled ? 1 : 0.72)
+    }
+    static func font(size: CGFloat) -> NSFont { .systemFont(ofSize: size, weight: .semibold) }
+    /// One line of text, from ascender to descender, rounded up.
+    static func lineHeight(font size: CGFloat) -> CGFloat { let f = font(size: size); return ceil(f.ascender - f.descender) }
+    /// The natural size: the title plus the padding.
+    static func size(title: String, font size: CGFloat) -> CGSize {
+        let text = ceil((title as NSString).size(withAttributes: [.font: font(size: size)]).width)
+        return CGSize(width: text + 2 * paddingX, height: lineHeight(font: size) + 2 * paddingY)
+    }
+    /// The lowest pill that still shows its text.
+    static func minimumHeight(font size: CGFloat) -> CGFloat { lineHeight(font: size) + 2 * minimumPaddingY }
+    /// The narrowest pill that keeps its whole title.
+    static func compactWidth(title: String, font size: CGFloat) -> CGFloat {
+        ceil((title as NSString).size(withAttributes: [.font: font(size: size)]).width) + 2 * minimumPaddingX
+    }
+}
+
+/// The helper's Stop pill drawn in the previews. It has no action.
+struct StopButtonView: View {
     let title: String
     let font: CGFloat
-    var dark = false
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(title: title, target: nil, action: nil)
-        button.bezelStyle = .rounded
-        button.setAccessibilityLabel(L10n.text("공유 중지 버튼 미리보기"))
-        button.toolTip = L10n.text("미리보기에서는 공유를 중지할 수 없습니다.")
-        return button
-    }
-    func updateNSView(_ button: NSButton, context: Context) {
-        button.title = title
-        button.font = .systemFont(ofSize: font)
-        button.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        button.hasDestructiveAction = true
-        // A bordered push button ignores contentTintColor for its title; color the title itself.
-        button.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: font), .foregroundColor: NSColor.systemRed])
+    /// The stopStyle setting: "red" or "gray".
+    var style = "red"
+    var enabled = true
+    var body: some View {
+        GeometryReader { geometry in
+            let text = ceil((title as NSString).size(withAttributes: [.font: StopPill.font(size: font)]).width)
+            let inset = max(8, min(StopPill.paddingX, ((geometry.size.width - text) / 2).rounded(.down)))
+            Text(verbatim: title)
+                .font(.system(size: font, weight: .semibold))
+                .foregroundStyle(Color(nsColor: StopPill.title(style: style, enabled: enabled)))
+                .lineLimit(1).truncationMode(.tail)
+                .padding(.horizontal, inset)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .background(Capsule().fill(Color(nsColor: StopPill.fill(style: style, enabled: enabled))))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.text("공유 중지 버튼 미리보기"))
+        .help(L10n.text("미리보기에서는 공유를 중지할 수 없습니다."))
     }
 }
 

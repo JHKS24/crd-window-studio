@@ -41,6 +41,9 @@ static void ApplyOverlay(BOOL reposition);
 static void BeginUserGeometry(NSWindow *window);
 static void EndUserGeometry(void);
 static BOOL TrackPress(NSWindow *window,NSEvent *down,BOOL canMove,void (^willMove)(void),NSEvent **upOut);
+static NSEvent *NextTrackingEvent(void);
+static NSPoint ScreenPoint(NSEvent *event);
+static BOOL PassedDragThreshold(NSPoint start,NSPoint current);
 static void InvalidateGeometry(void);
 
 
@@ -201,14 +204,17 @@ NSDictionary *CRDReadConfig(NSString **error) {
     if (![NSFileManager.defaultManager fileExistsAtPath:CRDConfigPath()]) return CRDDefaults();
     NSData *data = ReadData(error); return data ? ParseData(data,error) : nil;
 }
-// Creates the support folder (0700) and takes the exclusive config.json.lock; returns the lock fd or -1.
-static int LockConfig(NSString **error) {
+// Creates the support folder (0700) and tries the exclusive config.json.lock once. A busy
+// writer never stalls the helper's main queue or delays restoration during shutdown.
+static int LockConfig(NSString **error,BOOL *busy=nullptr) {
+    if(busy) *busy=NO;
     NSError *e; NSString *path = CRDConfigPath();
     if (![NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:&e]) {
         if (error) *error = e.localizedDescription; return -1;
     }
     int fd=open([path stringByAppendingPathExtension:@"lock"].fileSystemRepresentation,O_CREAT|O_RDWR|O_CLOEXEC,0600);
-    if(fd<0 || flock(fd,LOCK_EX)!=0) {
+    if(fd<0 || flock(fd,LOCK_EX|LOCK_NB)!=0) {
+        if(busy) *busy=fd>=0&&errno==EWOULDBLOCK;
         if(error) *error=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil].localizedDescription;
         if(fd>=0) close(fd); return -1;
     }
@@ -230,8 +236,8 @@ BOOL CRDWriteConfig(NSDictionary *input, NSString **error) {
 }
 // Read-modify-write of config.json under the lock. Returns the saved configuration, or nil when
 // the file cannot be read, the change does not validate, or the write fails.
-static NSDictionary *UpdateConfig(void (^change)(NSMutableDictionary *)) {
-    int fd=LockConfig(nil); if(fd<0) return nil;
+static NSDictionary *UpdateConfig(void (^change)(NSMutableDictionary *),BOOL *busy=nullptr) {
+    int fd=LockConfig(nil,busy); if(fd<0) return nil;
     // Once loaded, disappearance is not permission to replace the file with defaults.
     NSDictionary *latest=lastConfigData&&!FileSignature()?nil:CRDReadConfig(nil);
     NSMutableDictionary *next=[latest mutableCopy];
@@ -254,7 +260,8 @@ static NSUInteger ComposedLength(NSString *text) {
     return count;
 }
 // Returns the preset's validated values. Unknown and excluded keys are dropped; any invalid kept
-// value rejects the whole preset.
+// value rejects the whole preset. A preset without stopStyle was saved with the red Stop, so that
+// key alone is filled with "red".
 static NSDictionary *PresetValues(id values) {
     if(![values isKindOfClass:NSDictionary.class]) return nil;
     NSDictionary *defaults=CRDDefaults(); NSSet *excluded=PresetExcludedKeys();
@@ -264,6 +271,7 @@ static NSDictionary *PresetValues(id values) {
     NSDictionary *valid=Validate(kept,nil); if(!valid) return nil;
     NSMutableDictionary *result=[NSMutableDictionary dictionary];
     for(NSString *key in kept) result[key]=valid[key];
+    if(!result[@"stopStyle"]) result[@"stopStyle"]=@"red";
     return result;
 }
 // Reads up to 20 valid presets with unique ids and 1-40 character names; anything else is skipped.
@@ -316,7 +324,20 @@ static NSColor *DotColor(NSDictionary *config) {
 }
 
 #pragma mark - Overlay background and grips
-// The overlay's background view and its drag and resize grips.
+// The overlay's background view and its drag and resize grips, and the rules that keep a left
+// click a left click: menus open only on a right mouse down.
+
+// True only for a right mouse down: a right click, a two-finger click, or the right-mouse-down
+// event AppKit makes for a keyboard or Accessibility menu request. A left click never opens a
+// context menu, whatever its modifier flags, so AppKit's Control-click menu never replaces a click.
+static BOOL OpensContextMenu(NSEvent *event) { return event.type==NSEventTypeRightMouseDown; }
+// The same left mouse event without the Control flag; every other event unchanged.
+static NSEvent *LeftClickWithoutControl(NSEvent *event) {
+    NSEventType type=event.type;
+    if((type!=NSEventTypeLeftMouseDown&&type!=NSEventTypeLeftMouseUp&&type!=NSEventTypeLeftMouseDragged)||!(event.modifierFlags&NSEventModifierFlagControl)) return event;
+    return [NSEvent mouseEventWithType:type location:event.locationInWindow modifierFlags:event.modifierFlags&~NSEventModifierFlagControl
+        timestamp:event.timestamp windowNumber:event.windowNumber context:nil eventNumber:event.eventNumber clickCount:event.clickCount pressure:event.pressure]?:event;
+}
 
 // Draws the rounded background and border, moves the window on drag, and routes double-clicks
 // and context menus. Every press that is not on Stop reports its end to gestureEnded.
@@ -349,7 +370,10 @@ static NSColor *DotColor(NSDictionary *config) {
     NSView *view=[super hitTest:point];
     return view&&view!=self&&self.passesThrough&&self.passesThrough(view)?self:view;
 }
-- (NSMenu *)menuForEvent:(NSEvent *)event { return self.contextMenuProvider?self.contextMenuProvider():[super menuForEvent:event]; }
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    if(!OpensContextMenu(event)) return nil;
+    return self.contextMenuProvider?self.contextMenuProvider():[super menuForEvent:event];
+}
 - (void)rightMouseDown:(NSEvent *)event {
     NSMenu *menu=[self menuForEvent:event];
     if(menu&&self.contextMenuProvider) PresentStopContextMenu(menu,event,self); else [super rightMouseDown:event];
@@ -371,10 +395,14 @@ static NSColor *DotColor(NSDictionary *config) {
 @property BOOL resizeHandle;
 @property(copy) NSMenu *(^contextMenuProvider)(void);
 @property(copy) void (^gestureEnded)(NSEvent *); // Reports the end of each press, like CRDBackground.
+@property(copy) void (^doubleClickAction)(NSEvent *); // A double-click that neither moved nor resized.
 @end
 @implementation CRDDragHandle
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
-- (NSMenu *)menuForEvent:(NSEvent *)event { return self.contextMenuProvider?self.contextMenuProvider():[super menuForEvent:event]; }
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    if(!OpensContextMenu(event)) return nil;
+    return self.contextMenuProvider?self.contextMenuProvider():[super menuForEvent:event];
+}
 - (void)rightMouseDown:(NSEvent *)event {
     NSMenu *menu=[self menuForEvent:event];
     if(menu&&self.contextMenuProvider) PresentStopContextMenu(menu,event,self); else [super rightMouseDown:event];
@@ -407,31 +435,44 @@ static NSColor *DotColor(NSDictionary *config) {
     }
 }
 // The move grip drags the window; the resize grip resizes it from the bottom-right corner,
-// keeping the top edge fixed and the size within the window's min and max sizes.
+// keeping the top edge fixed and the size within the window's min and max sizes. A double-click
+// on either grip that neither moves nor resizes runs doubleClickAction, as on the background.
 - (void)mouseDown:(NSEvent *)event {
+    BOOL doubleClick=event.clickCount>=2&&self.doubleClickAction;
     if (!self.resizeHandle) {
         BOOL draggable=[self.config[@"draggable"] boolValue];
         if (draggable) [NSCursor.closedHandCursor push];
-        NSEvent *up=nil;
-        @try { TrackPress(self.window,event,draggable,nil,&up); } @finally { if (draggable) [NSCursor pop]; }
+        NSEvent *up=nil; BOOL moved=NO;
+        @try { moved=TrackPress(self.window,event,draggable,nil,&up); } @finally { if (draggable) [NSCursor pop]; }
         if (self.gestureEnded) self.gestureEnded(up?:event);
+        if (doubleClick&&!moved) self.doubleClickAction(up?:event);
         return;
     }
-    if (![self.config[@"resizable"] boolValue]) { if (self.gestureEnded) self.gestureEnded(event); return; }
-    NSWindow *window=self.window; NSRect original=window.frame; NSPoint start=NSEvent.mouseLocation;
-    NSEvent *last=event;
-    BeginUserGeometry(window);
+    if (![self.config[@"resizable"] boolValue]) {
+        NSEvent *up=nil; TrackPress(self.window,event,NO,nil,&up);
+        if (self.gestureEnded) self.gestureEnded(up?:event);
+        if (doubleClick) self.doubleClickAction(up?:event);
+        return;
+    }
+    NSWindow *window=self.window; NSRect original=window.frame; NSPoint start=ScreenPoint(event);
+    NSEvent *last=event; BOOL resizing=NO;
     @try {
         while (YES) {
-            NSEvent *next=[window nextEventMatchingMask:NSEventMaskLeftMouseDragged|NSEventMaskLeftMouseUp];
+            NSEvent *next=NextTrackingEvent();
             if (next) last=next;
             if (next.type==NSEventTypeLeftMouseUp || !next) break;
-            NSPoint current=NSEvent.mouseLocation;
+            if(next.type!=NSEventTypeLeftMouseDragged) continue;
+            NSPoint current=ScreenPoint(next);
+            if(!resizing) {
+                if(!PassedDragThreshold(start,current)) continue;
+                resizing=YES; BeginUserGeometry(window);
+            }
             CGFloat width=MAX(window.minSize.width,MIN(window.maxSize.width,original.size.width+current.x-start.x));
             CGFloat height=MAX(window.minSize.height,MIN(window.maxSize.height,original.size.height-(current.y-start.y)));
             [window setFrame:NSMakeRect(original.origin.x,NSMaxY(original)-height,width,height) display:YES];
         }
-    } @finally { EndUserGeometry(); if (self.gestureEnded) self.gestureEnded(last); }
+    } @finally { if(resizing) EndUserGeometry(); if (self.gestureEnded) self.gestureEnded(last); }
+    if (doubleClick&&!resizing) self.doubleClickAction(last);
 }
 @end
 
@@ -602,7 +643,7 @@ static NSDictionary *previousLoggedSettings,*previousLoggedState,*geometryPrevio
 // The subset of settings recorded with each log event.
 static NSDictionary *SettingsSnapshot(void) {
     NSMutableDictionary *snapshot=[NSMutableDictionary dictionary];
-    for(NSString *key in @[@"mode",@"shape",@"layout",@"placement",@"screen",@"x",@"y",@"width",@"height",@"radius",@"appearance",@"accent",@"dotColor",@"background",@"foreground",@"borderWidth",@"fontSize",@"dotDiameter",@"opacity",@"edgeInset",@"shadow",@"alwaysOnTop",@"draggable",@"resizable",@"constrainToScreen",@"showText",@"showStopButton",@"showDot",@"showHandle",@"handlePosition",@"handleSize",@"handleOpacity",@"loggingEnabled",@"enabled",@"stopRevealSeconds"]) {
+    for(NSString *key in @[@"mode",@"shape",@"layout",@"placement",@"screen",@"x",@"y",@"width",@"height",@"radius",@"appearance",@"accent",@"dotColor",@"background",@"foreground",@"borderWidth",@"fontSize",@"dotDiameter",@"opacity",@"edgeInset",@"shadow",@"alwaysOnTop",@"draggable",@"resizable",@"constrainToScreen",@"showText",@"showStopButton",@"showDot",@"showHandle",@"handlePosition",@"handleSize",@"handleOpacity",@"loggingEnabled",@"enabled",@"stopRevealSeconds",@"stopStyle"]) {
         if(currentConfig[key]) snapshot[key]=currentConfig[key];
     }
     return snapshot;
@@ -759,6 +800,8 @@ static CRDStopGestureGate *inlineStopGate;
 static void BlockInlineStop(void) { [inlineStopGate blockFrom:NSProcessInfo.processInfo.systemUptime]; }
 static void (^fixtureActivatePrevious)(NSRunningApplication *);
 static void (^fixtureOpenSettings)(NSURL *);
+// Records a context menu the self-test would open; the isolated self-test never shows a menu.
+static void (^fixturePresentMenu)(NSMenu *,NSEvent *,NSView *);
 // Reactivates the app that was frontmost before the menu, unless the menu opened the settings
 // app, the closing click went to another app, or focus already moved elsewhere.
 static void RestorePreviousApplication(CRDContextMenuTracking *tracking,NSRunningApplication *previous,BOOL helperActive,pid_t frontmost) {
@@ -784,6 +827,7 @@ static void OpenSettingsApplication(NSURL *target) {
 // Shows a context menu for an overlay view. The app activates for native menu tracking, the
 // inline Stop is blocked when the menu closes, and the previous app gets focus back.
 static void PresentStopContextMenu(NSMenu *menu,NSEvent *event,NSView *view,CRDStopGestureGate *gate) {
+    if(fixtureMode) { if(menu&&fixturePresentMenu) fixturePresentMenu(menu,event,view); return; }
     if(!menu||!view.window) return;
     [activeContextMenu cancel];
     NSRunningApplication *previousApplication=NSWorkspace.sharedWorkspace.frontmostApplication;
@@ -840,7 +884,7 @@ static void PresentStopContextMenu(NSMenu *menu,NSEvent *event,NSView *view,CRDS
     if(moved) return;
     if(event.clickCount>=2&&self.doubleClickAction) self.doubleClickAction(up?:event);
 }
-- (NSMenu *)menuForEvent:(NSEvent *)event { return self.geometricDot&&self.contextMenuProvider?self.contextMenuProvider():nil; }
+- (NSMenu *)menuForEvent:(NSEvent *)event { return OpensContextMenu(event)&&self.geometricDot&&self.contextMenuProvider?self.contextMenuProvider():nil; }
 - (void)rightMouseDown:(NSEvent *)event {
     NSMenu *menu=[self menuForEvent:event];
     if(menu) PresentStopContextMenu(menu,event,self,self.stopGestureGate);
@@ -865,6 +909,63 @@ static NSScreen *SelectedScreen(NSDictionary *d) {
     NSArray *screens = NSScreen.screens; NSInteger index = [d[@"screen"] integerValue];
     return index >= 0 && index < (NSInteger)screens.count ? screens[index] : screens.firstObject;
 }
+
+#pragma mark - Stop pill
+// The one Stop shape the helper draws everywhere: the inline Stop of the bar, capsule, compact and
+// card shapes, and the Stop in the capsule a double-click opens. The stopStyle setting picks its
+// colors: "red" is white semibold text on a red pill, "gray" is red semibold text on a grey pill.
+// Both styles share every metric. The accent color never tints it. HelperOverlayLayout and StopPill
+// in the settings app use the same metrics and colors.
+
+// Text padding inside the pill. A short window may take the vertical padding down to its minimum,
+// and a row that needs room for the dot the horizontal padding down to its minimum.
+static const CGFloat CRDPillPaddingX=16,CRDPillPaddingY=7,CRDPillMinimumPaddingX=10,CRDPillMinimumPaddingY=2;
+static NSColor *StopPillSRGB(uint32_t hex) { return [NSColor colorWithSRGBRed:((hex>>16)&0xFF)/255.0 green:((hex>>8)&0xFF)/255.0 blue:(hex&0xFF)/255.0 alpha:1]; }
+// A color that resolves to `light` or `dark` with the appearance it is drawn in.
+static NSColor *StopPillDynamic(uint32_t light,uint32_t dark) {
+    return [NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
+        BOOL isDark=[[appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+        return StopPillSRGB(isDark?dark:light);
+    }];
+}
+// True for the grey style; any other value draws the red style.
+static BOOL StopPillIsGray(NSString *style) { return [style isEqual:@"gray"]; }
+// #D93036 in light and dark. White text on it measures 4.74:1.
+static NSColor *StopPillRed(void) { return StopPillSRGB(0xD93036); }
+// The pill's fill. Red: red, a darker red while pressed, a faded red when disabled.
+// Gray: #DCDCE0 in light and #3A3A3C in dark, a step darker while pressed, faded when disabled.
+static NSColor *StopPillFill(NSString *style,BOOL enabled,BOOL pressed) {
+    if(StopPillIsGray(style)) {
+        NSColor *fill=pressed&&enabled?StopPillDynamic(0xCDCDD2,0x2C2C2E):StopPillDynamic(0xDCDCE0,0x3A3A3C);
+        return enabled?fill:[fill colorWithAlphaComponent:.5];
+    }
+    if(!enabled) return [StopPillRed() colorWithAlphaComponent:.38];
+    return pressed?StopPillSRGB(0xB22429):StopPillRed();
+}
+// The title color. Red: white. Gray: #B0201F in light (5.0:1 on its fill) and #FF8E87 in dark
+// (5.1:1), a deeper red while pressed in light. Both fade when Stop is disabled.
+static NSColor *StopPillTitleColor(NSString *style,BOOL enabled,BOOL pressed) {
+    if(StopPillIsGray(style)) {
+        NSColor *text=pressed&&enabled?StopPillDynamic(0x9E1C16,0xFF8E87):StopPillDynamic(0xB0201F,0xFF8E87);
+        return enabled?text:[text colorWithAlphaComponent:.45];
+    }
+    return [NSColor.whiteColor colorWithAlphaComponent:enabled?1:.72];
+}
+static NSFont *StopPillFont(CGFloat size) { return [NSFont systemFontOfSize:size weight:NSFontWeightSemibold]; }
+// One line of pill text, from ascender to descender, rounded up.
+static CGFloat StopPillLineHeight(NSFont *font) { return ceil(font.ascender-font.descender); }
+// The pill's natural size: the title plus 16 pt on each side and 7 pt above and below.
+static NSSize StopPillSize(NSString *title,NSFont *font) {
+    CGFloat text=ceil([title?:@"" sizeWithAttributes:@{NSFontAttributeName:font}].width);
+    return NSMakeSize(text+2*CRDPillPaddingX,StopPillLineHeight(font)+2*CRDPillPaddingY);
+}
+// The lowest pill that still shows its text: 2 pt above and below the line.
+static CGFloat StopPillMinimumHeight(NSFont *font) { return StopPillLineHeight(font)+2*CRDPillMinimumPaddingY; }
+// The narrowest pill that keeps its whole title: 10 pt at each side.
+static CGFloat StopPillCompactWidth(NSString *title,NSFont *font) { return ceil([title?:@"" sizeWithAttributes:@{NSFontAttributeName:font}].width)+2*CRDPillMinimumPaddingX; }
+// Gives a Stop button its title, semibold font and style. The button draws the pill itself
+// (CRDSessionStopButton), so it has no bezel, and its title stays its accessibility label.
+static void StyleStopPill(NSButton *button,NSString *title,CGFloat size,NSString *style);
 
 #pragma mark - Placement and layout
 // Placement on screen and the arrangement of the overlay's controls.
@@ -904,13 +1005,6 @@ static NSSize NumericWindowLimit(NSUInteger index) {
     NSDictionary *ranges = Schema()[@"numericLimits"];
     return NSMakeSize([ranges[@"width"][index] doubleValue], [ranges[@"height"][index] doubleValue]);
 }
-// The stop control reads as destructive. A rounded push button ignores
-// contentTintColor for its title, so the title itself carries the color.
-static void StyleStopTitle(NSButton *button,NSString *title,CGFloat font) {
-    NSColor *red=button.enabled?NSColor.systemRedColor:[NSColor.systemRedColor colorWithAlphaComponent:.45];
-    button.hasDestructiveAction=YES; button.contentTintColor=nil;
-    button.attributedTitle=[[NSAttributedString alloc] initWithString:title?:@"" attributes:@{NSFontAttributeName:[NSFont systemFontOfSize:font],NSForegroundColorAttributeName:red}];
-}
 // Keeps the grip inside rounded corners (1 - 1/sqrt(2) of the radius reaches the arc).
 // A full capsule end (radius at half the height) gets 3 pt more, so the ticks clear the curve.
 // HelperOverlayLayout in the settings app uses the same rule.
@@ -929,8 +1023,11 @@ static void Layout(CRDWindowState *s) {
     s.dot.dotDiameter=[d[@"dotDiameter"] doubleValue];
     s.dot.windowDragEnabled=dotLayout&&[d[@"draggable"] boolValue];
     s.dot.accessibilityLabel=L(@"상태 점");
-    // The tooltip explains the double-click that opens the stop button.
-    s.dot.toolTip=dotLayout?L(@"두 번 클릭하면 공유 중지 버튼이 나타나고, 다시 두 번 클릭하면 상태 점으로 줄어듭니다"):nil;
+    // The tooltip explains the double-click that opens the Stop capsule on every shape. In dot layout
+    // the dot covers the window and carries it; otherwise the background does.
+    NSString *doubleClickHint=L(@"두 번 클릭하면 공유 중지 버튼이 나타나고, 다시 두 번 클릭하면 원래 모양으로 돌아갑니다");
+    s.dot.toolTip=dotLayout?doubleClickHint:nil;
+    s.customView.toolTip=doubleClickHint;
     [s.dot setNeedsDisplay:YES];
     s.handle.config=s.resizeHandle.config=d;
     s.handle.hidden=YES; s.resizeHandle.hidden=YES;
@@ -960,12 +1057,14 @@ static void Layout(CRDWindowState *s) {
     CGFloat line=ceil([NSFont systemFontOfSize:font].ascender-[NSFont systemFontOfSize:font].descender)+4;
     CGFloat pad=MIN(12,MIN(w,h)/4), gap=8, dotWidth=MAX(12,font+4);
     s.customView.config=d;
-    s.label.font=s.dot.font=s.stop.font=[NSFont systemFontOfSize:font];
+    s.label.font=s.dot.font=[NSFont systemFontOfSize:font];
     s.label.stringValue=ConfiguredText(d[@"text"],@"text",@"화면을 공유하고 있습니다");
     s.label.textColor=Color(d[@"foreground"],@"foreground");
     s.dot.textColor=DotColor(d);
-    StyleStopTitle(s.stop,ConfiguredText(d[@"buttonText"],@"buttonText",@"공유 중지"),font); [s.stop sizeToFit];
-    CGFloat buttonW=MAX(36,s.stop.frame.size.width), buttonH=MAX(24,s.stop.frame.size.height);
+    StyleStopPill(s.stop,ConfiguredText(d[@"buttonText"],@"buttonText",@"공유 중지"),font,d[@"stopStyle"]);
+    // The pill's natural size, at least 36 x 24 pt. A short window lowers it to its minimum height.
+    NSSize pill=StopPillSize(s.stop.title,s.stop.font);
+    CGFloat buttonW=MAX(36,pill.width), buttonH=MAX(24,pill.height), minimumButtonH=MAX(24,StopPillMinimumHeight(s.stop.font));
     s.label.hidden=s.dot.hidden=s.stop.hidden=YES;
     s.label.frame=s.dot.frame=s.stop.frame=NSZeroRect;
     NSString *layout=d[@"layout"];
@@ -979,6 +1078,7 @@ static void Layout(CRDWindowState *s) {
         CGFloat inner=MAX(0,w-2*pad-handleLeft-handleRight), top=h-(handleTop>0?MAX(pad,handleTop+2):pad);
         CGFloat centerX=handleLeft+(w-handleLeft-handleRight)/2;
         // Keep the real stop action visible whenever its minimum usable area fits.
+        buttonH=MAX(minimumButtonH,MIN(buttonH,h-2*pad));
         if ([d[@"showStopButton"] boolValue] && inner>=36 && h>=buttonH+2*pad) {
             s.stop.hidden=NO; buttonW=MIN(buttonW,inner);
             s.stop.frame=NSMakeRect(centerX-buttonW/2,pad,buttonW,buttonH);
@@ -995,10 +1095,13 @@ static void Layout(CRDWindowState *s) {
     } else {
         CGFloat left=pad+handleLeft,right=w-pad-handleRight;
         CGFloat availableHeight=h-handleTop;
+        buttonH=MAX(minimumButtonH,MIN(buttonH,availableHeight));
         // The stop button stays clear of the grip when their heights overlap.
         if (!s.resizeHandle.hidden && (availableHeight-buttonH)/2<NSMaxY(s.resizeHandle.frame)+1)
             right=MIN(right,NSMinX(s.resizeHandle.frame)-2);
         if ([d[@"showStopButton"] boolValue] && availableHeight>=buttonH && right-left>=36) {
+            // A tight row narrows the pill's side padding before it gives up the dot beside it.
+            if ([d[@"showDot"] boolValue] && availableHeight>=line) buttonW=MIN(buttonW,MAX(StopPillCompactWidth(s.stop.title,s.stop.font),right-left-dotWidth-gap));
             buttonW=MIN(buttonW,right-left); s.stop.hidden=NO;
             s.stop.frame=NSMakeRect(right-buttonW,(availableHeight-buttonH)/2,buttonW,buttonH); right-=buttonW+gap;
         }
@@ -1026,7 +1129,12 @@ static void EndUserGeometry(void) { userGeometryTracking=NO; }
 // The helper's own move loop. The window server never drags the panel, so macOS
 // tiling and top-edge arrangement never apply. Fixtures feed events without a real mouse.
 static NSEvent *(^fixtureNextTrackingEvent)(void);
-static const CGFloat CRDDragThreshold=3;
+// Remote clients can shift either coordinate by up to 4 pt during a click.
+// Move and resize start only beyond that tolerance, including on a double-click.
+static const CGFloat CRDDragThreshold=4;
+static BOOL PassedDragThreshold(NSPoint start,NSPoint current) {
+    return MAX(fabs(current.x-start.x),fabs(current.y-start.y))>CRDDragThreshold;
+}
 // Next drag or mouse-up event; fixtures supply events, and self-tests never wait for real input.
 static NSEvent *NextTrackingEvent(void) {
     if(fixtureNextTrackingEvent) return fixtureNextTrackingEvent();
@@ -1062,7 +1170,7 @@ static BOOL TrackPress(NSWindow *window,NSEvent *down,BOOL canMove,void (^willMo
             if(next.type!=NSEventTypeLeftMouseDragged||!window) continue;
             NSPoint to=ScreenPoint(next);
             if(!moving) {
-                if(!canMove||hypot(to.x-from.x,to.y-from.y)<CRDDragThreshold) continue;
+                if(!canMove||!PassedDragThreshold(from,to)) continue;
                 moving=YES; if(willMove) willMove(); BeginUserGeometry(window);
             }
             NSScreen *screen=ScreenAtPoint(to,window.screen?:SelectedScreen(currentConfig));
@@ -1079,11 +1187,13 @@ static BOOL SystemResized(NSWindow *window) {
     return fabs(size.width-[currentConfig[@"width"] doubleValue])>.5||fabs(size.height-[currentConfig[@"height"] doubleValue])>.5;
 }
 // Saves the captured user geometry to config.json as a custom position (and a custom shape when
-// the size changed), only in custom mode, and records a geometry-saved event.
-static void PersistGeometry(CRDWindowState *s) {
+// the size changed), only in custom mode, and records a geometry-saved event. A busy lock keeps
+// that captured frame dirty for a later attempt; shutdown makes only one attempt.
+static void ScheduleGeometry(CRDWindowState *s);
+static void PersistGeometry(CRDWindowState *s,BOOL retry=YES) {
     if (!geometryDirty || previewMode || applying || !Custom() || !s.shown || !s.controller) return;
     // Capture at the user event, not at flush time: WindowServer can move a window later.
-    NSRect f=geometryFrame,visible=geometryVisibleFrame;
+    NSRect f=geometryFrame,visible=geometryVisibleFrame; BOOL busy=NO;
     NSDictionary *d=UpdateConfig(^(NSMutableDictionary *latest){
         if(![latest[@"mode"] isEqual:@"custom"]) return;
         if(geometryScreenIndex!=NSNotFound) latest[@"screen"]=@(geometryScreenIndex);
@@ -1092,14 +1202,23 @@ static void PersistGeometry(CRDWindowState *s) {
             latest[@"width"]=@(f.size.width); latest[@"height"]=@(f.size.height); latest[@"shape"]=@"custom";
         }
         latest[@"placement"]=@"custom";
-    });
+    },&busy);
     if (d) {
         geometryDirty=NO;
         // Preserve the prior settings before replacing the committed geometry.
         geometryPreviousSettings=SettingsSnapshot();
         currentConfig=[d copy]; lastConfigData=ReadData(nil); lastObservedSignature=FileSignature(); lastConfigReloadDate=NSDate.date;
         WriteRuntimeStatus(@"geometry-saved",s.controller); geometryPreviousSettings=nil;
-    }
+    } else if(busy&&retry) ScheduleGeometry(s);
+}
+// Coalesces pending geometry and retries lock contention without waiting on the main thread.
+// There is no scheduled work once geometry is saved, invalidated, or the helper exits.
+static void ScheduleGeometry(CRDWindowState *s) {
+    NSUInteger generation=++geometryGeneration;
+    __weak CRDWindowState *weakState=s;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,150*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+        if(generation==geometryGeneration) { CRDWindowState *state=weakState; if(state) PersistGeometry(state); }
+    });
 }
 // Captures the frame after a user move or resize and saves it 150 ms later, once the gesture settles.
 static void SaveGeometry(CRDWindowState *s) {
@@ -1109,11 +1228,7 @@ static void SaveGeometry(CRDWindowState *s) {
     if(!screen) return;
     geometryDirty=YES; geometryFrame=s.controller.window.frame; geometryVisibleFrame=screen.visibleFrame;
     geometryScreenIndex=[NSScreen.screens indexOfObject:screen];
-    NSUInteger generation=++geometryGeneration;
-    __weak CRDWindowState *weakState=s;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,150*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
-        if(generation==geometryGeneration) { CRDWindowState *state=weakState; if(state) PersistGeometry(state); }
-    });
+    ScheduleGeometry(s);
 }
 
 #pragma mark - Configuration reload and file watching
@@ -1192,36 +1307,49 @@ static NSTextField *OverlayLabel(NSString *text) {
     NSTextField *label=[NSTextField labelWithString:text]; label.lineBreakMode=NSLineBreakByTruncatingTail;
     label.maximumNumberOfLines=1; return label;
 }
-// A panel that never becomes key or main, so the overlay never takes focus.
+// A panel that never becomes key or main, so the overlay never takes focus. Every left mouse event
+// reaches its views without the Control flag (LeftClickWithoutControl), so a Control-click, or a
+// Control flag stuck in remote input, stays an ordinary click.
 @interface CRDOverlayPanel : NSPanel
 @end
 @implementation CRDOverlayPanel
 - (BOOL)canBecomeKeyWindow { return NO; }
 - (BOOL)canBecomeMainWindow { return NO; }
+- (void)sendEvent:(NSEvent *)event { [super sendEvent:LeftClickWithoutControl(event)]; }
 @end
-// The Stop button. A press captures the current session token, and the action acts only on that
-// token, so a press that began for one sharing window can never stop a later one.
+// The Stop button, drawn as the Stop pill in its style. A press captures the current session token, and the
+// action acts only on that token, so a press that began for one sharing window can never stop a later one.
 @interface CRDSessionStopButton : NSButton
 @property NSDictionary *sessionToken;
 @property NSDictionary *gestureToken;
 @property BOOL trackingGesture;
+@property BOOL rejectingPress;
 @property CRDStopGestureGate *stopGestureGate;
 @property(copy) NSMenu *(^contextMenuProvider)(void);
-/// The drawn bezel inside a larger press area (the capsule's Stop). The frame, and so every press
-/// rule, covers the whole press area; only the drawing is the bar's button size. Zero draws the frame.
-@property NSSize bezelSize;
+/// The drawn pill inside a larger press area (the capsule's Stop), in the button's coordinates. The
+/// frame, and so every press rule, covers the whole press area. Zero draws the pill over the whole frame.
+@property NSRect pillFrame;
+/// The stopStyle setting the pill is drawn in: "red" or "gray".
+@property(nonatomic,copy) NSString *stopStyle;
 - (BOOL)acceptsPress:(NSEvent *)event;
-- (NSRect)bezelRect;
+- (NSRect)pillRect;
 @end
 @implementation CRDSessionStopButton
-- (NSRect)bezelRect {
-    NSRect b=self.bounds; if(self.bezelSize.width<=0||self.bezelSize.height<=0) return b;
-    CGFloat w=MIN(b.size.width,self.bezelSize.width),h=MIN(b.size.height,self.bezelSize.height);
-    return NSMakeRect(round(NSMidX(b)-w/2),round(NSMidY(b)-h/2),w,h);
-}
+- (void)setStopStyle:(NSString *)stopStyle { _stopStyle=[stopStyle copy]; [self setNeedsDisplay:YES]; }
+- (NSRect)pillRect { return NSIsEmptyRect(self.pillFrame)?self.bounds:NSIntersectionRect(self.bounds,self.pillFrame); }
+// Fills the pill (pressed and disabled states included) and draws the title centered in one
+// line, truncated at the tail when the pill is narrower than its text.
 - (void)drawRect:(NSRect)dirty {
-    if(self.bezelSize.width<=0||self.bezelSize.height<=0) { [super drawRect:dirty]; return; }
-    [self.cell drawWithFrame:[self bezelRect] inView:self];
+    NSRect pill=[self pillRect]; if(NSIsEmptyRect(pill)) return;
+    CGFloat radius=NSHeight(pill)/2;
+    [StopPillFill(self.stopStyle,self.enabled,self.cell.isHighlighted) setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:pill xRadius:radius yRadius:radius] fill];
+    NSFont *font=self.font?:StopPillFont(NSFont.systemFontSize);
+    NSMutableParagraphStyle *style=[NSMutableParagraphStyle new]; style.alignment=NSTextAlignmentCenter; style.lineBreakMode=NSLineBreakByTruncatingTail;
+    NSDictionary *attributes=@{NSFontAttributeName:font,NSForegroundColorAttributeName:StopPillTitleColor(self.stopStyle,self.enabled,self.cell.isHighlighted),NSParagraphStyleAttributeName:style};
+    CGFloat text=ceil([self.title sizeWithAttributes:attributes].width),line=StopPillLineHeight(font);
+    CGFloat inset=MAX(8,MIN(CRDPillPaddingX,floor((NSWidth(pill)-text)/2)));
+    [self.title drawInRect:NSMakeRect(NSMinX(pill)+inset,round(NSMidY(pill)-line/2),MAX(0,NSWidth(pill)-2*inset),line) withAttributes:attributes];
 }
 // The gate first (so a rejected press still extends it), then a single click only:
 // the second click of a double-click never presses Stop.
@@ -1230,19 +1358,36 @@ static NSTextField *OverlayLabel(NSString *text) {
     return event.clickCount==1&&self.enabled;
 }
 - (void)mouseDown:(NSEvent *)event {
-    if(![self acceptsPress:event]) return;
+    self.rejectingPress=![self acceptsPress:event];
+    if(self.rejectingPress) return;
     self.gestureToken=self.sessionToken; self.trackingGesture=YES;
     @try { [super mouseDown:event]; }
     @finally { self.trackingGesture=NO; self.gestureToken=nil; }
 }
+// A refused down still owns its release. Extend the gate from that release, even when
+// remote input delays it and resets the click count on the next press.
+- (void)mouseUp:(NSEvent *)event {
+    if(self.rejectingPress) { [self.stopGestureGate recordGesture:event]; self.rejectingPress=NO; return; }
+    [super mouseUp:event];
+}
 // The session token of the press in progress; nil outside a tracked press.
 - (NSDictionary *)actionToken { return self.trackingGesture?self.gestureToken:nil; }
-- (NSMenu *)menuForEvent:(NSEvent *)event { return self.contextMenuProvider?self.contextMenuProvider():[super menuForEvent:event]; }
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    if(!OpensContextMenu(event)) return nil;
+    return self.contextMenuProvider?self.contextMenuProvider():[super menuForEvent:event];
+}
 - (void)rightMouseDown:(NSEvent *)event {
     NSMenu *menu=[self menuForEvent:event];
     if(menu) PresentStopContextMenu(menu,event,self,self.stopGestureGate); else [super rightMouseDown:event];
 }
 @end
+
+static void StyleStopPill(NSButton *button,NSString *title,CGFloat size,NSString *style) {
+    button.bordered=NO; button.hasDestructiveAction=YES; button.contentTintColor=nil;
+    button.title=title?:@""; button.font=StopPillFont(size);
+    if([button isKindOfClass:CRDSessionStopButton.class]) ((CRDSessionStopButton *)button).stopStyle=style;
+    [button setNeedsDisplay:YES];
+}
 
 #pragma mark - Self-test fixture types
 // Native tracking fixtures use hidden windows and enqueue only this app's events.
@@ -1278,47 +1423,68 @@ static NSTextField *OverlayLabel(NSString *text) {
 @end
 
 #pragma mark - Stop reveal capsule geometry
-// Sizes and frames of the temporary Stop capsule opened from the dot.
-// Usability metrics belong to temporary controls, independent of the saved dot/font size.
-static const CGFloat CRDStopHitWidth=120,CRDStopHitHeight=36,CRDStopTextPadding=12,CRDCapsuleInset=2;
+// Sizes and frames of the temporary Stop capsule a double-click opens on any shape. The capsule holds
+// the status dot on the left and the Stop pill on the right, vertically centered, with no empty bezel.
+// Its Stop metrics are independent of the saved font; a visible dot-layout dot keeps its diameter.
+// ExpandedStopCapsule in the settings app draws the same layout.
+static const CGFloat CRDCapsulePadding=6,CRDCapsuleDotInset=12,CRDCapsuleDotGap=10,CRDCapsuleDotDiameter=12;
+// The capsule's Stop press area is at least 120 x 36 pt; a pill wider than the maximum truncates its label.
+static const CGFloat CRDStopHitWidth=120,CRDStopHitHeight=36,CRDCapsulePillMaximumWidth=280;
 static const CGFloat CRDStopShrinkMargin=6; // A double-click this close to Stop does nothing.
+static const CGFloat CRDStopTextPadding=12; // Text padding of the native Stop menu.
 static const NSTimeInterval CRDRevealOpenDuration=.20,CRDRevealCloseDuration=.16;
-// The end inset beside Stop equals the space above and below its bezel.
-static CGFloat CapsuleEndInset(CGFloat height,CGFloat bezelHeight) {
-    return bezelHeight>0?MAX(CRDCapsuleInset,round((height-bezelHeight)/2)):CRDStopTextPadding;
+// The capsule's parts in its own coordinates (origin bottom-left).
+struct CRDCapsuleLayout { NSSize size; NSRect dot,pill,press; };
+// Lays out the capsule for a natural pill size and a visible fold dot. The space above,
+// below and at the right end of the pill is 6 pt (more when the dot is taller than the pill). The dot
+// sits 12 pt from the left end and 10 pt before the pill, leaving room to fold outside Stop.
+// The press area is the pill, the capsule's padding around it and half the gap, and the pill widens
+// so that the press area is at least 120 x 36 pt.
+static CRDCapsuleLayout CapsuleLayout(NSSize pill,CGFloat dotDiameter) {
+    CRDCapsuleLayout layout={};
+    CGFloat dot=dotDiameter>0?dotDiameter:CRDCapsuleDotDiameter;
+    CGFloat height=MAX(pill.height,dot)+2*CRDCapsulePadding,inset=round((height-pill.height)/2);
+    CGFloat pillX=CRDCapsuleDotInset+dot+CRDCapsuleDotGap;
+    CGFloat pressX=pillX-CRDCapsuleDotGap/2;
+    CGFloat pillWidth=MIN(CRDCapsulePillMaximumWidth,MAX(pill.width,CRDStopHitWidth-(pillX-pressX)-inset));
+    layout.size=NSMakeSize(pillX+pillWidth+inset,height);
+    layout.pill=NSMakeRect(pillX,inset,pillWidth,pill.height);
+    layout.press=NSMakeRect(pressX,0,layout.size.width-pressX,height);
+    layout.dot=NSMakeRect(CRDCapsuleDotInset,(height-dot)/2,dot,dot);
+    return layout;
 }
-// A capsule centered on the anchor, wide enough for the dot end, Stop and its end inset, and no
-// wider than the room on the anchor's nearer side allows. fits reports whether it fits on screen.
-static NSRect SymmetricCapsuleFrame(NSRect anchor,NSRect visible,NSSize hit,BOOL *fits,CGFloat bezelHeight=0) {
-    CGFloat height=MAX(anchor.size.height,hit.height+2*CRDCapsuleInset);
-    CGFloat minimumWidth=height+hit.width+CapsuleEndInset(height,bezelHeight);
-    CGFloat available=2*MAX(0,MIN(NSMidX(anchor)-NSMinX(visible),NSMaxX(visible)-NSMidX(anchor)));
-    CGFloat width=MIN(MAX(anchor.size.width,minimumWidth),available);
-    NSRect frame=NSMakeRect(NSMidX(anchor)-width/2,NSMidY(anchor)-height/2,width,height);
-    if(fits) *fits=width>=minimumWidth&&NSContainsRect(visible,frame);
+// Fits unusually large dots or labels on a small display without substituting a menu. First
+// shorten the label and reduce the dot, retaining the 120 pt Stop target where space permits.
+// A display smaller than the minimum capsule scales the entire layout to its available size.
+static CRDCapsuleLayout CapsuleLayoutOnScreen(NSSize pill,CGFloat dotDiameter,NSSize available) {
+    CRDCapsuleLayout layout=CapsuleLayout(pill,dotDiameter);
+    if(layout.size.width<=available.width&&layout.size.height<=available.height) return layout;
+    CGFloat dot=MIN(dotDiameter,MAX(MIN(dotDiameter,CRDCapsuleDotDiameter),MIN(available.height-2*CRDCapsulePadding,available.width-CRDStopHitWidth-CRDCapsuleDotInset-CRDCapsuleDotGap/2)));
+    layout=CapsuleLayout(pill,dot);
+    CGFloat trim=MIN(MAX(0,layout.size.width-available.width),layout.press.size.width-CRDStopHitWidth);
+    layout.pill.size.width-=trim; layout.press.size.width-=trim; layout.size.width-=trim;
+    CGFloat scale=MIN(1,MIN(available.width/layout.size.width,available.height/layout.size.height));
+    if(scale<1) {
+        layout.size=NSMakeSize(layout.size.width*scale,layout.size.height*scale);
+        NSRect *parts[]={&layout.dot,&layout.pill,&layout.press};
+        for(NSRect *rect:parts)
+            *rect=NSMakeRect(rect->origin.x*scale,rect->origin.y*scale,rect->size.width*scale,rect->size.height*scale);
+    }
+    return layout;
+}
+// Centers the capsule, then moves it inside the visible frame at whole points. It covers the
+// anchor's center when that point is on-screen; an off-screen center uses the nearest position.
+static NSRect CapsuleFrame(NSRect anchor,NSRect visible,NSSize size,BOOL *fits) {
+    NSRect frame=NSMakeRect(round(NSMidX(anchor)-size.width/2),round(NSMidY(anchor)-size.height/2),size.width,size.height);
+    frame.origin.x=MAX(ceil(NSMinX(visible)),MIN(frame.origin.x,floor(NSMaxX(visible)-size.width)));
+    frame.origin.y=MAX(ceil(NSMinY(visible)),MIN(frame.origin.y,floor(NSMaxY(visible)-size.height)));
+    if(fits) *fits=NSContainsRect(visible,frame);
     return frame;
 }
 static NSNumber *fixtureReduceMotion;
+static NSValue *fixtureRevealVisibleFrame;
 // False when Reduce Motion is on (or a fixture says so).
 static BOOL RevealAnimationsEnabled(void) { return !(fixtureMode&&fixtureReduceMotion?fixtureReduceMotion.boolValue:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion); }
-// The bar's Stop bezel at the system font: the same control, title style and fitted size.
-static NSSize InlineStopBezelSize(NSString *title) {
-    NSButton *probe=[NSButton buttonWithTitle:title?:@"" target:nil action:nil]; probe.bezelStyle=NSBezelStyleRounded;
-    StyleStopTitle(probe,probe.title,NSFont.systemFontSize); [probe sizeToFit];
-    return NSMakeSize(MAX(36,probe.frame.size.width),MAX(24,probe.frame.size.height));
-}
-// Styles the capsule's Stop button and returns its press-area size.
-static NSSize ConfigureRevealButton(NSButton *button) {
-    button.controlSize=NSControlSizeRegular;
-    button.font=[NSFont systemFontOfSize:NSFont.systemFontSize];
-    // A bordered red push button, so it reads as the stop action and not as a caption.
-    button.bordered=YES; button.bezelStyle=NSBezelStyleRounded; button.alignment=NSTextAlignmentCenter;
-    button.cell.wraps=NO; button.cell.scrollable=NO; button.cell.lineBreakMode=NSLineBreakByClipping;
-    StyleStopTitle(button,button.title,NSFont.systemFontSize);
-    button.accessibilityLabel=L(@"공유 중지");
-    NSSize title=[button.title sizeWithAttributes:@{NSFontAttributeName:button.font}];
-    return NSMakeSize(MAX(CRDStopHitWidth,ceil(title.width)+2*CRDStopTextPadding),MAX(CRDStopHitHeight,ceil(title.height)+2*CRDCapsuleInset));
-}
 // True when two Stop tokens name the same process, window generation, window and Stop element.
 static BOOL SameStopToken(NSDictionary *token,NSDictionary *current) {
     if(!token||!current||![token[@"pid"] isEqual:current[@"pid"]]||![token[@"generation"] isEqual:current[@"generation"]]) return NO;
@@ -1380,6 +1546,8 @@ static CRDOverlayCoordinator *coordinator;
 @property NSUInteger revealGeneration;
 @property BOOL revealSavedIgnoresMouseEvents;
 @property CGFloat revealSavedDotAlpha;
+// True while the capsule stands in for a shape other than the dot, which is hidden under it.
+@property BOOL revealHidesWindow;
 @property CRDStatusDot *revealDot;
 @property CRDSessionStopButton *revealStopButton;
 @property id revealInputMonitor;
@@ -1397,6 +1565,7 @@ static CRDOverlayCoordinator *coordinator;
 - (void)scheduleReconcile:(NSString *)event;
 - (void)requestReconcile;
 - (void)refreshTrust;
+- (void)screenParametersChanged;
 - (void)reconcile;
 - (void)stopSharingClicked:(id)sender;
 - (void)cleanExit;
@@ -1417,6 +1586,7 @@ static int fixtureProcessExistenceError;
 static NSNumber *fixtureTrusted;
 static void (^fixtureReconcile)(CRDOverlayCoordinator *);
 static void (^fixtureRefreshAcknowledged)(void);
+static NSDictionary *fixtureStopToken; // A session token the self-test supplies for its double-click checks.
 // Accessibility trust; fixtures supply their own value.
 static BOOL CurrentTrust(void) { return fixtureMode?(fixtureTrusted?fixtureTrusted.boolValue:coordinator.trusted):AXIsProcessTrusted()!=0; }
 // Per-user, per-process Darwin notification names for refresh requests and their acknowledgement.
@@ -1659,9 +1829,10 @@ static void ApplyOverlay(BOOL reposition) {
     // A preset, menu or settings change that moves or shows the inline Stop arms its gate.
     NSRect stopAfter=overlay.stop.hidden?NSZeroRect:NSOffsetRect(overlay.stop.frame,NSMinX(w.frame),NSMinY(w.frame));
     if(!NSEqualRects(stopBefore,stopAfter)&&!overlay.stop.hidden) BlockInlineStop();
-    CGFloat font=[d[@"fontSize"] doubleValue]; if(font==0) font=NSFont.systemFontSize;
-    StyleStopTitle(overlay.stop,overlay.stop.title,font);
     ((CRDSessionStopButton *)overlay.stop).sessionToken=[coordinator currentStopToken];
+    // While the Stop capsule is open, the window under it keeps no shadow, and a shape other than
+    // the dot stays hidden, whatever this pass applied.
+    if(coordinator.stopRevealPanel) { w.hasShadow=NO; if(coordinator.revealHidesWindow) w.alphaValue=0; }
     applying=previous;
 }
 // Tiling, Stage Manager or a screen change resized the panel. A pending user move is
@@ -1677,7 +1848,6 @@ static NSUInteger systemResizeWindowCount;
 // trailing correction at the end of that second; there is no repeating timer.
 static void RevertSystemResize(void) {
     if(geometryDirty) PersistGeometry(overlay);
-    geometryGeneration++; geometryDirty=NO; // A system frame is never saved.
     if(systemResizeRevertPending) return;
     NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
     if(now-systemResizeWindowStart>1) { systemResizeWindowStart=now; systemResizeWindowCount=0; }
@@ -1685,7 +1855,12 @@ static void RevertSystemResize(void) {
     systemResizeRevertPending=YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         systemResizeRevertPending=NO; systemResizeReverts++;
-        ApplyOverlay(YES); WriteRuntimeStatus(@"system-resize-reverted",nil);
+        if(geometryDirty) {
+            // A busy writer must not discard the user's captured frame or its pending retry.
+            BOOL previous=applying; applying=YES;
+            [overlay.controller.window setFrame:geometryFrame display:YES]; applying=previous;
+        } else ApplyOverlay(YES);
+        WriteRuntimeStatus(@"system-resize-reverted",nil);
     });
 }
 // Builds the overlay panel and its views, wires double-click, drag, context menu and Stop gate
@@ -1702,16 +1877,15 @@ static void CreateOverlay(void) {
     overlay.label=OverlayLabel(overlay.message); overlay.dot=[CRDStatusDot labelWithString:@"●"];
     overlay.dot.lineBreakMode=NSLineBreakByTruncatingTail; overlay.dot.maximumNumberOfLines=1;
     __weak CRDOverlayCoordinator *weakCoordinator=coordinator;
-    // A double-click anywhere on the dot window expands it (the dot fills the window;
-    // the background covers the window when the dot is hidden).
+    // A double-click anywhere on the window except Stop opens the Stop capsule, on every shape: on
+    // the background (which also takes clicks on the caption and the inline dot), on the dot in dot
+    // layout, and on either grip.
     void (^expand)(NSEvent *)=^(NSEvent *event){
-        if(![currentConfig[@"layout"] isEqual:@"dot"]) return;
-        NSDictionary *token=[weakCoordinator currentStopToken]; if(token) [weakCoordinator presentStopRevealWithToken:token afterEvent:event];
+        [weakCoordinator presentStopRevealWithToken:[weakCoordinator currentStopToken] afterEvent:event];
     };
     overlay.dot.doubleClickAction=expand;
     overlay.dot.dragWillBegin=^{ [weakCoordinator closeStopReveal:@"dot-drag-began"]; };
     overlay.stop=[CRDSessionStopButton buttonWithTitle:ConfiguredText(CRDDefaults()[@"buttonText"],@"buttonText",@"공유 중지") target:coordinator action:@selector(stopSharingClicked:)];
-    overlay.stop.bezelStyle=NSBezelStyleRounded;
     inlineStopGate=[CRDStopGestureGate new]; ((CRDSessionStopButton *)overlay.stop).stopGestureGate=inlineStopGate;
     overlay.handle=[CRDDragHandle new]; overlay.handle.toolTip=L(@"끌어서 옮기기"); overlay.handle.accessibilityLabel=L(@"이동 핸들");
     overlay.resizeHandle=[CRDDragHandle new]; overlay.resizeHandle.resizeHandle=YES; overlay.resizeHandle.toolTip=L(@"끌어서 크기 조절");
@@ -1721,6 +1895,7 @@ static void CreateOverlay(void) {
     overlay.customView.contextMenuProvider=windowMenu; overlay.handle.contextMenuProvider=windowMenu; overlay.resizeHandle.contextMenuProvider=windowMenu;
     overlay.dot.contextMenuProvider=windowMenu;
     overlay.customView.doubleClickAction=expand; overlay.customView.dragWillBegin=overlay.dot.dragWillBegin;
+    overlay.handle.doubleClickAction=expand; overlay.resizeHandle.doubleClickAction=expand;
     CRDStopGestureGate *inlineGate=inlineStopGate;
     void (^recordInline)(NSEvent *)=^(NSEvent *ended){ [inlineGate recordGesture:ended]; };
     overlay.customView.gestureEnded=recordInline; overlay.dot.gestureEnded=recordInline;
@@ -1930,6 +2105,7 @@ static void ReconcileFromConfig(BOOL needsAX) {
 // The token of the current sharing session (pid, window generation, window and Stop elements),
 // or nil when Stop is not available.
 - (NSDictionary *)currentStopToken {
+    if(fixtureMode&&fixtureStopToken) return fixtureStopToken;
     if(!self.stopAvailable||!self.windowDetected||!self.original||self.original.terminated||!self.windowElement||!self.stopElement) return nil;
     return @{@"pid":@(self.original.processIdentifier),@"generation":@(self.windowGeneration),@"window":self.windowElement,@"stop":self.stopElement};
 }
@@ -1973,54 +2149,56 @@ static void ReconcileFromConfig(BOOL needsAX) {
 }
 
 #pragma mark - Coordinator: Stop reveal capsule
-// The capsule that grows from the dot to offer Stop, and its input gate.
+// The capsule a double-click opens on any shape to offer Stop, and its input gate.
 - (void)presentStopRevealWithToken:(NSDictionary *)token {
     [self presentStopRevealWithToken:token afterEvent:nil];
 }
-// Opens the Stop capsule over the dot in dot layout and custom mode. The capsule panel sits
-// below the dot window, a duplicate dot slides to its left end, and Stop fades in. Stop stays
-// disabled until the opening finishes and is gated from the triggering event. When the capsule
-// does not fit on screen, a native Stop menu opens instead.
+// Opens the Stop capsule in custom mode, on any shape, centered on the window and moved inside the
+// screen near an edge or a corner. In dot layout the capsule grows from the dot: its panel sits
+// below the dot window and a duplicate dot slides to the capsule's left end. On the other shapes
+// the window fades out and the capsule fades in at its center, with a dot in the dot color. Stop
+// stays disabled until the opening finishes and is gated from the triggering event. A missing
+// target leaves Stop disabled, and an unusually small screen gets a fitted capsule.
 - (void)presentStopRevealWithToken:(NSDictionary *)token afterEvent:(NSEvent *)event {
-    if(!token||(!fixtureMode&&!SameStopToken(token,[self currentStopToken]))||![currentConfig[@"layout"] isEqual:@"dot"]||![EffectiveMode() isEqual:@"custom"]) return;
+    if((token&&!fixtureMode&&!SameStopToken(token,[self currentStopToken]))||![EffectiveMode() isEqual:@"custom"]) return;
     [self closeStopReveal:@"reopened"];
-    CRDSessionStopButton *button=[CRDSessionStopButton buttonWithTitle:L(@"공유 중지") target:self action:@selector(stopSharingClicked:)];
+    BOOL dotLayout=[currentConfig[@"layout"] isEqual:@"dot"];
+    NSString *title=ConfiguredText(currentConfig[@"buttonText"],@"buttonText",@"공유 중지");
+    CRDSessionStopButton *button=[CRDSessionStopButton buttonWithTitle:title target:self action:@selector(stopSharingClicked:)];
     // The capsule always has a gate, seeded from the triggering event (or now).
     CRDStopGestureGate *gate=[CRDStopGestureGate new];
     [gate blockFrom:event?event.timestamp:NSProcessInfo.processInfo.systemUptime];
     button.sessionToken=token; button.enabled=NO; button.stopGestureGate=gate;
-    NSSize hit=ConfigureRevealButton(button);
-    // Drawn like the bar's Stop (its height, radius and bezel), as wide as the full press area.
-    button.bezelSize=NSMakeSize(hit.width,MIN(hit.height,InlineStopBezelSize(button.title).height));
-    NSRect anchor=overlay.controller.window.frame,visible=(overlay.controller.window.screen?:SelectedScreen(currentConfig)).visibleFrame;
-    BOOL fits=NO; NSRect frame=SymmetricCapsuleFrame(anchor,visible,hit,&fits,button.bezelSize.height);
-    if(!fits) {
-        WriteRuntimeStatus(@"stop-reveal-context-fallback",nil);
-        // Native menus can fit near an edge without moving the saved dot or its anchor.
-        if(!fixtureMode) PresentStopContextMenu([self stopContextMenu],nil,overlay.customView,gate);
-        return;
-    }
+    StyleStopPill(button,title,NSFont.systemFontSize,currentConfig[@"stopStyle"]); button.accessibilityLabel=L(@"공유 중지");
+    NSWindow *anchorWindow=overlay.controller.window;
+    NSRect anchor=anchorWindow.frame,visible=(anchorWindow.screen?:SelectedScreen(currentConfig)).visibleFrame;
+    if(fixtureMode&&fixtureRevealVisibleFrame) visible=fixtureRevealVisibleFrame.rectValue;
+    // A visible dot-layout dot keeps its drawn diameter. Every other capsule has a 12 pt dot,
+    // even when showDot is off, so a manual fold target always remains outside Stop.
+    CGFloat diameter=dotLayout&&!overlay.dot.hidden?MIN(overlay.dot.dotDiameter,MIN(anchor.size.width,anchor.size.height)):CRDCapsuleDotDiameter;
+    NSSize pill=StopPillSize(title,button.font);
+    NSSize available=NSMakeSize(floor(NSMaxX(visible))-ceil(NSMinX(visible)),floor(NSMaxY(visible))-ceil(NSMinY(visible)));
+    CRDCapsuleLayout layout=CapsuleLayoutOnScreen(pill,diameter,available);
+    if(layout.pill.size.height<pill.height) button.font=[NSFont systemFontOfSize:button.font.pointSize*layout.pill.size.height/pill.height];
+    NSRect frame=CapsuleFrame(anchor,visible,layout.size,nullptr);
     self.revealToken=token;
     self.revealModeSignature=[NSString stringWithFormat:@"%@:%@:%@",@(SettingsEnabled()),currentConfig[@"mode"],currentConfig[@"layout"]];
-    CGFloat width=frame.size.width,height=frame.size.height;
+    CGFloat width=frame.size.width,height=frame.size.height,windowAlpha=anchorWindow.alphaValue;
     CRDOverlayPanel *panel=[[CRDOverlayPanel alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
-    panel.releasedWhenClosed=NO; panel.hidesOnDeactivate=NO; panel.level=overlay.controller.window.level; panel.title=L(@"공유 중지");
-    panel.hasShadow=overlay.controller.window.hasShadow; panel.appearance=overlay.controller.window.appearance;
-    panel.opaque=NO; panel.backgroundColor=NSColor.clearColor; panel.alphaValue=overlay.controller.window.alphaValue;
+    panel.releasedWhenClosed=NO; panel.hidesOnDeactivate=NO; panel.level=anchorWindow.level; panel.title=L(@"공유 중지");
+    panel.hasShadow=anchorWindow.hasShadow; panel.appearance=anchorWindow.appearance;
+    panel.opaque=NO; panel.backgroundColor=NSColor.clearColor; panel.alphaValue=windowAlpha;
     panel.collectionBehavior=NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorFullScreenAuxiliary;
     CRDBackground *background=[[CRDBackground alloc] initWithFrame:NSMakeRect(0,0,width,height)];
     background.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; background.autoresizesSubviews=NO; background.clipsToBounds=YES;
     NSMutableDictionary *appearance=[currentConfig mutableCopy]; appearance[@"radius"]=@(height/2); appearance[@"draggable"]=@NO; background.config=appearance; panel.contentView=background;
-    // Stop starts where the dot's own inset ends (dot inset, dot, the same inset), and its end
-    // inset matches the space above and below the bezel; a wider anchor centers the extra width.
-    CGFloat endInset=CapsuleEndInset(height,button.bezelSize.height);
-    NSRect finalButton=NSMakeRect(height+MAX(0,(width-height-hit.width-endInset)/2),(height-hit.height)/2,hit.width,hit.height);
-    button.frame=finalButton;
+    // The button's frame is the whole press area; the pill is drawn inside it.
+    button.frame=layout.press; button.pillFrame=NSOffsetRect(layout.pill,-NSMinX(layout.press),-NSMinY(layout.press));
     __weak CRDOverlayCoordinator *weakSelf=self;
-    // A double-click anywhere except Stop (plus a margin) shrinks the capsule back.
+    // A double-click anywhere except Stop (plus a margin) folds the capsule back.
     // The capsule itself stays unmovable (its background config has draggable off).
     void (^shrink)(NSEvent *)=^(NSEvent *input){ [weakSelf closeStopReveal:@"user-collapsed"]; };
-    NSRect stopZone=NSInsetRect(finalButton,-CRDStopShrinkMargin,-CRDStopShrinkMargin);
+    NSRect stopZone=NSInsetRect(layout.press,-CRDStopShrinkMargin,-CRDStopShrinkMargin);
     background.doubleClickAction=shrink; background.doubleClickExclusion=stopZone;
     void (^recordCapsule)(NSEvent *)=^(NSEvent *ended){ [gate recordGesture:ended]; };
     background.gestureEnded=recordCapsule;
@@ -2028,25 +2206,27 @@ static void ReconcileFromConfig(BOOL needsAX) {
     [background addSubview:button]; self.stopRevealPanel=panel; self.revealStopButton=button;
     CRDStatusDot *movingDot=[CRDStatusDot labelWithString:@""];
     movingDot.geometricDot=YES; movingDot.windowDragEnabled=NO;
-    movingDot.dotDiameter=MIN(overlay.dot.dotDiameter,MIN(anchor.size.width,anchor.size.height));
-    movingDot.textColor=overlay.dot.textColor; movingDot.hidden=overlay.dot.hidden;
+    movingDot.dotDiameter=diameter; movingDot.textColor=overlay.dot.textColor;
     movingDot.contextMenuProvider=^{ return [weakSelf stopContextMenu]; };
     movingDot.stopGestureGate=gate; movingDot.doubleClickAction=shrink; movingDot.gestureEnded=recordCapsule;
     movingDot.accessibilityLabel=L(@"상태 점");
-    CGFloat diameter=movingDot.dotDiameter;
+    // In dot layout the duplicate starts at the dot's own place in the window, so hiding the
+    // original does not blink.
     NSRect centeredDot=NSMakeRect((anchor.size.width-diameter)/2,(anchor.size.height-diameter)/2,diameter,diameter);
-    NSRect leftDot=NSMakeRect((height-diameter)/2,(height-diameter)/2,diameter,diameter);
-    movingDot.frame=centeredDot; [background addSubview:movingDot]; self.revealDot=movingDot;
-    self.revealSavedDotAlpha=overlay.dot.alphaValue;
-    self.revealSavedIgnoresMouseEvents=overlay.controller.window.ignoresMouseEvents;
-    overlay.controller.window.ignoresMouseEvents=YES;
-    overlay.customView.suppressBackground=YES; overlay.controller.window.hasShadow=NO; [overlay.customView setNeedsDisplay:YES];
-    NSRect collapsed=anchor;
-    BOOL animate=RevealAnimationsEnabled(); button.alphaValue=animate?0:1;
-    if(animate) [panel setFrame:collapsed display:NO]; else movingDot.frame=leftDot;
-    if(!fixtureMode) [panel orderWindow:NSWindowBelow relativeTo:overlay.controller.window.windowNumber];
+    NSRect leftDot=layout.dot;
+    BOOL animate=RevealAnimationsEnabled();
+    movingDot.frame=dotLayout&&animate?centeredDot:leftDot; [background addSubview:movingDot]; self.revealDot=movingDot;
+    self.revealSavedDotAlpha=overlay.dot.alphaValue; self.revealHidesWindow=!dotLayout;
+    self.revealSavedIgnoresMouseEvents=anchorWindow.ignoresMouseEvents;
+    anchorWindow.ignoresMouseEvents=YES;
+    button.alphaValue=animate?0:1;
+    if(dotLayout) {
+        overlay.customView.suppressBackground=YES; anchorWindow.hasShadow=NO; [overlay.customView setNeedsDisplay:YES];
+        if(animate) [panel setFrame:anchor display:NO];
+    } else if(animate) panel.alphaValue=0;
+    else { anchorWindow.alphaValue=0; anchorWindow.hasShadow=NO; }
+    if(!fixtureMode) [panel orderWindow:NSWindowBelow relativeTo:anchorWindow.windowNumber];
     if(gate) {
-        NSWindow *anchorWindow=overlay.controller.window;
         self.revealStopZone=stopZone; self.revealGuardedSequence=NO;
         self.revealInputMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown|NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *input) {
             CRDOverlayCoordinator *strongSelf=weakSelf;
@@ -2054,14 +2234,14 @@ static void ReconcileFromConfig(BOOL needsAX) {
             return [strongSelf filterRevealInput:input gate:gate];
         }];
     }
-    // The duplicate starts at the same global point, so hiding the original does not blink.
-    overlay.dot.alphaValue=0;
+    if(dotLayout) overlay.dot.alphaValue=0;
     NSUInteger generation=++self.revealGeneration;
     void (^opened)(void)=^{
         CRDOverlayCoordinator *strongSelf=weakSelf;
         if(!strongSelf||strongSelf.stopRevealPanel!=panel||strongSelf.revealGeneration!=generation) return;
-        button.enabled=!fixtureMode&&strongSelf.stopAvailable&&!strongSelf.stopping;
-        // stopRevealSeconds is the auto-shrink delay; 0 keeps the capsule open until shrunk.
+        if(!dotLayout) anchorWindow.hasShadow=NO;
+        button.enabled=!fixtureMode&&SameStopToken(token,[strongSelf currentStopToken])&&strongSelf.stopAvailable&&!strongSelf.stopping;
+        // stopRevealSeconds is the auto-fold delay; 0 keeps the capsule open until folded.
         NSTimeInterval seconds=currentConfig[@"stopRevealSeconds"]?[currentConfig[@"stopRevealSeconds"] doubleValue]:5;
         if(seconds>0) {
             dispatch_source_t timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_get_main_queue()); strongSelf.revealTimer=timer;
@@ -2071,7 +2251,9 @@ static void ReconcileFromConfig(BOOL needsAX) {
         WriteRuntimeStatus(@"stop-reveal-opened",nil);
     };
     if(animate) [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context){
-        context.duration=CRDRevealOpenDuration; [[panel animator] setFrame:frame display:YES]; [[button animator] setAlphaValue:1]; [[movingDot animator] setFrame:leftDot];
+        context.duration=CRDRevealOpenDuration; [[button animator] setAlphaValue:1];
+        if(dotLayout) { [[panel animator] setFrame:frame display:YES]; [[movingDot animator] setFrame:leftDot]; }
+        else { [[panel animator] setAlphaValue:windowAlpha]; [[anchorWindow animator] setAlphaValue:0]; }
     } completionHandler:opened]; else opened();
 }
 // Presses that start on Stop (plus the margin) go through the gate. Other presses on the
@@ -2090,10 +2272,14 @@ static void ReconcileFromConfig(BOOL needsAX) {
 }
 // Closes the capsule when the window was lost, the session changed, or mode or layout changed.
 - (void)validateStopRevealForToken:(NSDictionary *)token modeSignature:(NSString *)signature windowDetected:(BOOL)detected {
-    if(self.stopRevealPanel&&(!detected||!SameStopToken(self.revealToken,token)||![signature isEqual:self.revealModeSignature])) [self closeStopReveal:@"target-or-mode-changed"];
+    BOOL sameTarget=(!self.revealToken&&!token)||SameStopToken(self.revealToken,token);
+    if(self.stopRevealPanel&&(!detected||!sameTarget||![signature isEqual:self.revealModeSignature])) [self closeStopReveal:@"target-or-mode-changed"];
 }
 // Closes the capsule: cancels any open menu, the timer and the input monitor, disables Stop at
-// once, and restores the dot window. A timeout or user collapse animates when motion is allowed.
+// once, and gives the window back its configured look and input. The inline Stop that comes back
+// under the pointer is gated like any other Stop that appears. A timeout or a fold by the user
+// animates when motion is allowed: the dot slides back in dot layout, and the capsule fades out
+// while the window fades in on the other shapes.
 - (void)closeStopReveal:(NSString *)reason {
     [activeContextMenu cancel]; // A menu must not outlive its dot/panel/session anchor.
     if(self.revealTimer) { dispatch_source_cancel(self.revealTimer); self.revealTimer=nil; }
@@ -2101,24 +2287,35 @@ static void ReconcileFromConfig(BOOL needsAX) {
     self.revealStopButton.enabled=NO; self.revealStopButton.contextMenuProvider=nil; self.revealDot.contextMenuProvider=nil;
     NSUInteger generation=++self.revealGeneration;
     NSPanel *panel=self.stopRevealPanel; if(!panel) return;
+    BOOL hidesWindow=self.revealHidesWindow;
+    NSWindow *anchorWindow=overlay.controller.window;
+    CGFloat windowAlpha=[currentConfig[@"opacity"] doubleValue];
     __weak CRDOverlayCoordinator *weakSelf=self;
     void (^closed)(void)=^{
         CRDOverlayCoordinator *strongSelf=weakSelf;
         if(!strongSelf||strongSelf.stopRevealPanel!=panel||strongSelf.revealGeneration!=generation) return;
         [panel orderOut:nil]; strongSelf.stopRevealPanel=nil; strongSelf.revealStopButton=nil; strongSelf.revealDot=nil; strongSelf.revealToken=nil; strongSelf.revealModeSignature=nil;
+        strongSelf.revealHidesWindow=NO;
         overlay.dot.alphaValue=strongSelf.revealSavedDotAlpha;
-        overlay.controller.window.ignoresMouseEvents=strongSelf.revealSavedIgnoresMouseEvents;
-        overlay.customView.suppressBackground=NO; overlay.controller.window.hasShadow=[currentConfig[@"shadow"] boolValue]; [overlay.customView setNeedsDisplay:YES];
+        anchorWindow.ignoresMouseEvents=strongSelf.revealSavedIgnoresMouseEvents;
+        if(hidesWindow) anchorWindow.alphaValue=windowAlpha;
+        overlay.customView.suppressBackground=NO; anchorWindow.hasShadow=[currentConfig[@"shadow"] boolValue]; [overlay.customView setNeedsDisplay:YES];
+        BlockInlineStop();
         WriteRuntimeStatus([@"stop-reveal-closed-" stringByAppendingString:reason],nil);
     };
     if(([reason isEqual:@"timeout"]||[reason isEqual:@"user-collapsed"])&&RevealAnimationsEnabled()) {
-        NSRect anchor=overlay.controller.window.frame;
-        NSRect collapsed=anchor; CGFloat diameter=self.revealDot.dotDiameter;
+        // The disappearing panel must not swallow a new gesture on the original window.
+        panel.ignoresMouseEvents=YES; anchorWindow.ignoresMouseEvents=self.revealSavedIgnoresMouseEvents;
+        BlockInlineStop();
+        NSRect anchor=anchorWindow.frame; CGFloat diameter=self.revealDot.dotDiameter;
         NSRect center=NSMakeRect((anchor.size.width-diameter)/2,(anchor.size.height-diameter)/2,diameter,diameter);
+        CRDStatusDot *dot=self.revealDot;
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context){
-            context.duration=CRDRevealCloseDuration; [[panel animator] setFrame:collapsed display:YES];
-            [[self.revealDot animator] setFrame:center];
-            for(NSView *view in panel.contentView.subviews) if(view!=self.revealDot) [[view animator] setAlphaValue:0];
+            context.duration=CRDRevealCloseDuration;
+            if(hidesWindow) { [[panel animator] setAlphaValue:0]; [[anchorWindow animator] setAlphaValue:windowAlpha]; return; }
+            [[panel animator] setFrame:anchor display:YES];
+            [[dot animator] setFrame:center];
+            for(NSView *view in panel.contentView.subviews) if(view!=dot) [[view animator] setAlphaValue:0];
         } completionHandler:closed];
     } else closed();
 }
@@ -2307,6 +2504,12 @@ static void ReconcileFromConfig(BOOL needsAX) {
     [self bindOriginal:original]; self.ownsHidden=YES;
     if(self.trusted) SetOriginalHidden(self,NO);
 }
+// Removes the temporary capsule before a display change repositions its anchor. System layout
+// invalidates pending geometry instead of turning a screen change into a saved user move.
+- (void)screenParametersChanged {
+    [self closeStopReveal:@"screens-changed"];
+    ApplyOverlay(YES); [self scheduleReconcile:@"screens-changed"];
+}
 // Starts the helper: event log, journal recovery, refresh notification, overlay, menu bar item,
 // config watchers, host launch/terminate and screen observers, and SIGTERM/SIGINT handlers
 // that exit cleanly.
@@ -2329,7 +2532,7 @@ static void ReconcileFromConfig(BOOL needsAX) {
         if(application.processIdentifier==self.original.processIdentifier) { [self releaseOriginal]; [self scheduleReconcile:@"original-terminated"]; }
     }];
     self.screenObserver=[NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){
-        ApplyOverlay(YES); [self scheduleReconcile:@"screens-changed"];
+        [self screenParametersChanged];
     }];
     self.workspaceReady=self.launchObserver!=nil&&self.terminateObserver!=nil;
     signal(SIGTERM,SIG_IGN); signal(SIGINT,SIG_IGN);
@@ -2340,17 +2543,19 @@ static void ReconcileFromConfig(BOOL needsAX) {
     }
     [self reconcile];
 }
-// Saves pending geometry, removes the UI, and restores the host before the helper exits.
+// Restores the host before optional persistence, then removes the helper UI. Geometry gets
+// one nonblocking save attempt; shutdown never waits for another configuration writer.
 - (void)cleanExit {
     if(self.stopping) return; self.stopping=YES;
     if(self.refreshRegistered) { notify_cancel(self.refreshNotifyToken); self.refreshRegistered=NO; }
     self.refreshRequested=NO;
     self.observerRetryGeneration++;
-    PersistGeometry(overlay); InvalidateGeometry();
+    [self releaseOriginal];
+    PersistGeometry(overlay,NO); InvalidateGeometry();
     [self closeStopReveal:@"agent-stopped"];
     if(self.statusItem) { [NSStatusBar.systemStatusBar removeStatusItem:self.statusItem]; self.statusItem=nil; }
     [overlay.controller.window orderOut:nil]; overlay.shown=NO;
-    [self releaseOriginal]; WriteRuntimeStatus(@"agent-stopped",nil);
+    WriteRuntimeStatus(@"agent-stopped",nil);
 }
 // Exits with status 1 while restoration is still owed, so launchd can start the helper again.
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -2423,6 +2628,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     coordinator=[CRDOverlayCoordinator new]; currentConfig=CRDDefaults(); lastConfigReloadDate=NSDate.date;
     CreateOverlay(); StartWatchers(); CRDReload();
     NSMutableArray *checks=[NSMutableArray array];
+    NSMutableDictionary *measurements=[NSMutableDictionary dictionary];
     auto check=[&](NSString *name,BOOL passed){ [checks addObject:@{@"name":name,@"passed":@(passed)}]; };
     // Exercise the actual argument parser only; neither trust API is called by these checks.
     const char *plainArgs[]={"fixture","--crd-permission-status"};
@@ -2542,7 +2748,8 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     check(@"resize_grip_inset_by_corner_radius",gripInside); check(@"row_stop_button_clear_of_resize_grip",gripClear);
     grip[@"radius"]=@24; grip[@"height"]=@48; grip[@"width"]=@380; grip[@"layout"]=@"row"; apply(grip);
     check(@"capsule_grip_sits_inside_the_rounded_end",NSMinY(overlay.resizeHandle.frame)==10&&NSMaxX(overlay.resizeHandle.frame)==370);
-    check(@"stop_button_is_destructive_red",overlay.stop.hasDestructiveAction&&[[overlay.stop.attributedTitle attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nil] isEqual:[NSColor.systemRedColor colorWithAlphaComponent:.45]]&&!overlay.stop.enabled);
+    check(@"stop_button_is_a_borderless_destructive_pill",overlay.stop.hasDestructiveAction&&!overlay.stop.bordered&&overlay.stop.contentTintColor==nil&&!overlay.stop.enabled&&
+        [overlay.stop.font isEqual:StopPillFont(NSFont.systemFontSize)]&&[overlay.stop isKindOfClass:CRDSessionStopButton.class]);
     check(@"caption_and_inline_dot_act_as_background",overlay.customView.passesThrough(overlay.label)&&overlay.customView.passesThrough(overlay.dot)&&!overlay.customView.passesThrough(overlay.stop)&&!overlay.customView.passesThrough(overlay.handle));
     NSEvent *rightClick=[NSEvent mouseEventWithType:NSEventTypeRightMouseDown location:NSMakePoint(20,20) modifierFlags:0 timestamp:0 windowNumber:0 context:nil eventNumber:9 clickCount:1 pressure:1];
     NSMenu *windowMenu=[overlay.customView menuForEvent:rightClick];
@@ -2557,7 +2764,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     apply(d);
     check(@"dot_is_centered_without_separate_handles",!overlay.dot.hidden&&overlay.handle.hidden&&overlay.resizeHandle.hidden&&fabs(NSMidX(overlay.dot.frame)-NSMidX(overlay.customView.bounds))<.1&&fabs(NSMidY(overlay.dot.frame)-NSMidY(overlay.customView.bounds))<.1);
     check(@"dot_preserves_show_handle_setting",[currentConfig[@"showHandle"] boolValue]);
-    check(@"dot_tooltip_mentions_double_click_and_shrink",[overlay.dot.toolTip isEqual:L(@"두 번 클릭하면 공유 중지 버튼이 나타나고, 다시 두 번 클릭하면 상태 점으로 줄어듭니다")]&&!overlay.customView.passesThrough(overlay.dot));
+    check(@"dot_tooltip_mentions_double_click_and_return",[overlay.dot.toolTip isEqual:L(@"두 번 클릭하면 공유 중지 버튼이 나타나고, 다시 두 번 클릭하면 원래 모양으로 돌아갑니다")]&&!overlay.customView.passesThrough(overlay.dot));
     NSRect oval=overlay.dot.geometricDotRect;
     check(@"dot_oval_bounds_geometric_center",overlay.dot.geometricDot&&fabs(NSMidX(oval)-NSMidX(overlay.dot.bounds))<.001&&fabs(NSMidY(oval)-NSMidY(overlay.dot.bounds))<.001&&fabs(oval.size.width-oval.size.height)<.001);
     overlay.dot.textColor=NSColor.redColor; overlay.dot.stringValue=@"NOT A CIRCLE GLYPH";
@@ -2791,6 +2998,28 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         [NSFileManager.defaultManager fileExistsAtPath:presetsPath]&&CRDReadConfig(nil)!=nil);
     [NSFileManager.defaultManager removeItemAtPath:presetsPath error:nil];
     check(@"missing_presets_file_is_an_empty_list",ReadPresets().count==0);
+    // A full preset saved before the Stop style existed loads, matches and applies as the red Stop;
+    // an explicit gray preset keeps gray. The helper never rewrites presets.json.
+    {
+        NSMutableDictionary *older=[CRDDefaults() mutableCopy]; for(NSString *key in PresetExcludedKeys()) [older removeObjectForKey:key]; [older removeObjectForKey:@"stopStyle"];
+        NSMutableDictionary *grayValues=[older mutableCopy]; grayValues[@"stopStyle"]=@"gray";
+        [[NSJSONSerialization dataWithJSONObject:@{@"schema":@1,@"presets":@[@{@"id":@"older",@"name":@"Before styles",@"values":older},@{@"id":@"gray",@"name":@"Gray",@"values":grayValues}]} options:0 error:nil] writeToFile:presetsPath atomically:YES];
+        NSData *presetBytes=[NSData dataWithContentsOfFile:presetsPath];
+        NSArray<NSDictionary *> *styled=ReadPresets();
+        UpdateConfig(^(NSMutableDictionary *next){ [next addEntriesFromDictionary:grayValues]; }); CRDReload();
+        NSDictionary *grayConfig=CRDReadConfig(nil);
+        BOOL loadsRed=styled.count==2&&[styled[0][@"values"][@"stopStyle"] isEqual:@"red"]&&[styled[1][@"values"][@"stopStyle"] isEqual:@"gray"]&&[styled[0][@"values"] count]==older.count+1;
+        BOOL matching=!PresetMatches(styled[0][@"values"],grayConfig)&&PresetMatches(styled[1][@"values"],grayConfig);
+        NSMenuItem *olderItem=[NSMenuItem new]; olderItem.representedObject=styled[0][@"values"]; [coordinator applyPreset:olderItem];
+        NSDictionary *redApplied=CRDReadConfig(nil);
+        NSMenuItem *grayItem=[NSMenuItem new]; grayItem.representedObject=styled[1][@"values"]; [coordinator applyPreset:grayItem];
+        NSDictionary *grayApplied=CRDReadConfig(nil);
+        check(@"preset_without_stop_style_loads_and_applies_as_red",loadsRed&&matching&&[redApplied[@"stopStyle"] isEqual:@"red"]&&[grayApplied[@"stopStyle"] isEqual:@"gray"]&&
+            [redApplied[@"mode"] isEqual:grayConfig[@"mode"]]&&[redApplied[@"enabled"] isEqual:grayConfig[@"enabled"]]&&[grayApplied[@"mode"] isEqual:grayConfig[@"mode"]]&&
+            [grayApplied[@"enabled"] isEqual:grayConfig[@"enabled"]]&&[[NSData dataWithContentsOfFile:presetsPath] isEqual:presetBytes]);
+        UpdateConfig(^(NSMutableDictionary *next){ next[@"stopStyle"]=@"red"; }); CRDReload();
+        [NSFileManager.defaultManager removeItemAtPath:presetsPath error:nil];
+    }
     // A preset for a display that is not connected (screen 63) with an edge inset past it.
     NSMenuItem *farPreset=[NSMenuItem new]; farPreset.representedObject=@{@"screen":@63,@"placement":@"top",@"edgeInset":@5000,@"constrainToScreen":@NO,@"layout":@"row",@"width":@300,@"height":@40};
     [coordinator applyPreset:farPreset]; NSDictionary *farSaved=CRDReadConfig(nil);
@@ -2917,46 +3146,98 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     [coordinator presentStopRevealWithToken:tokenA]; RunFor(1.3);
     check(@"auto_shrink_off_keeps_capsule_open_until_shrunk",coordinator.stopRevealPanel!=nil&&coordinator.revealTimer==nil&&overlay.customView.suppressBackground);
     [coordinator closeStopReveal:@"fixture"]; apply(reveal);
-    NSMenu *context=[overlay.dot menuForEvent:fixtureClick];
+    NSMenu *context=[overlay.dot menuForEvent:rightClick];
     check(@"dot_context_menu_is_window_menu_with_safe_stop_action",context.numberOfItems==8&&[context itemAtIndex:7].action==@selector(stopSharingClicked:)&&![context itemAtIndex:7].enabled&&[context itemAtIndex:1].action==@selector(togglePositionLock:));
     fixtureLanguage=@"en";
     [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
-    NSButton *englishReveal=(NSButton *)coordinator.stopRevealPanel.contentView.subviews.firstObject;
-    NSSize englishTitle=[englishReveal.title sizeWithAttributes:@{NSFontAttributeName:englishReveal.font}];
-    NSRect englishTitleRect=[englishReveal.cell titleRectForBounds:englishReveal.bounds];
-    check(@"english_reveal_title_fits_standard_native_control",[englishReveal.title isEqual:translatedStop]&&englishTitleRect.size.width>=ceil(englishTitle.width)&&englishTitleRect.size.height>=ceil(englishTitle.height));
+    CRDSessionStopButton *englishReveal=coordinator.revealStopButton;
+    CGFloat englishText=ceil([englishReveal.title sizeWithAttributes:@{NSFontAttributeName:englishReveal.font}].width);
+    check(@"english_reveal_title_fits_the_pill",[englishReveal.title isEqual:translatedStop]&&NSWidth([englishReveal pillRect])>=englishText+2*CRDPillPaddingX);
     [coordinator closeStopReveal:@"english-fixture-complete"]; fixtureLanguage=nil;
+    // The capsule's Stop takes the stopStyle setting with the same press area, pill and gate.
+    {
+        NSDictionary *saved=[currentConfig copy]; NSMutableDictionary *gray=[saved mutableCopy]; gray[@"stopStyle"]=@"gray"; apply(gray);
+        [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+        CRDSessionStopButton *grayReveal=coordinator.revealStopButton; NSRect grayFrame=grayReveal.frame,grayPill=[grayReveal pillRect],grayPanel=coordinator.stopRevealPanel.frame;
+        BOOL grayGated=grayReveal.stopGestureGate!=nil&&[grayReveal.stopStyle isEqual:@"gray"];
+        [coordinator closeStopReveal:@"gray-fixture-complete"]; apply(saved);
+        [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+        CRDSessionStopButton *redReveal=coordinator.revealStopButton;
+        check(@"capsule_stop_takes_the_style_with_unchanged_metrics_and_gate",grayGated&&[redReveal.stopStyle isEqual:@"red"]&&redReveal.stopGestureGate!=nil&&
+            NSEqualRects(grayFrame,redReveal.frame)&&NSEqualRects(grayPill,[redReveal pillRect])&&NSEqualSizes(grayPanel.size,coordinator.stopRevealPanel.frame.size));
+        [coordinator closeStopReveal:@"red-fixture-complete"];
+    }
     NSRect mainBefore=overlay.controller.window.frame; NSDictionary *settingsBefore=[currentConfig copy];
     [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
     check(@"stop_reveal_does_not_change_main_geometry_or_config",coordinator.stopRevealPanel!=nil&&!coordinator.stopRevealPanel.visible&&NSEqualRects(mainBefore,overlay.controller.window.frame)&&[settingsBefore isEqual:currentConfig]);
-    NSButton *revealed=(NSButton *)coordinator.stopRevealPanel.contentView.subviews.firstObject;
-    NSSize titleSize=[revealed.title sizeWithAttributes:@{NSFontAttributeName:revealed.font}];
-    NSRect titleRect=[revealed.cell titleRectForBounds:revealed.bounds];
-    check(@"reveal_full_single_line_title_and_readable_target",[revealed.title isEqual:L(@"공유 중지")]&&revealed.frame.size.width>=CRDStopHitWidth&&revealed.frame.size.height>=CRDStopHitHeight&&titleRect.size.width>=ceil(titleSize.width)&&titleRect.size.height>=ceil(titleSize.height)&&!revealed.cell.wraps);
-    check(@"reveal_system_font_independent_of_dot_font",revealed.font.pointSize==NSFont.systemFontSize&&revealed.controlSize==NSControlSizeRegular);
-    check(@"reveal_button_is_bordered_and_red",revealed.bordered&&revealed.hasDestructiveAction&&revealed.contentTintColor==nil&&[revealed.attributedTitle attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nil]!=nil);
+    CRDSessionStopButton *revealed=coordinator.revealStopButton;
+    CGFloat revealedText=ceil([revealed.title sizeWithAttributes:@{NSFontAttributeName:revealed.font}].width);
+    check(@"reveal_full_single_line_title_and_readable_target",[revealed.title isEqual:L(@"공유 중지")]&&[revealed.accessibilityLabel isEqual:L(@"공유 중지")]&&
+        revealed.frame.size.width>=CRDStopHitWidth&&revealed.frame.size.height>=CRDStopHitHeight&&NSWidth([revealed pillRect])>=revealedText+2*CRDPillPaddingX&&
+        NSContainsRect(revealed.bounds,[revealed pillRect]));
+    check(@"reveal_system_font_independent_of_dot_font",revealed.font.pointSize==NSFont.systemFontSize&&[revealed.font isEqual:StopPillFont(NSFont.systemFontSize)]&&revealed.controlSize==NSControlSizeRegular);
+    check(@"reveal_stop_is_the_default_red_pill",[revealed isKindOfClass:CRDSessionStopButton.class]&&[revealed.stopStyle isEqual:@"red"]&&!revealed.bordered&&revealed.hasDestructiveAction&&revealed.contentTintColor==nil);
     NSRect capsuleFrame=coordinator.stopRevealPanel.frame;
-    // Stop draws at the bar's button height inside its full press area; the dot's inset
-    // repeats between the dot and Stop, and the end inset equals the space above and below the bezel.
+    // The pill is as high as the inline pill at the system font; the space above, below and at
+    // the right end of the pill is 6 pt; the dot sits 12 pt from the left end and 10 pt before the pill.
     {
-        CRDSessionStopButton *stopButton=(CRDSessionStopButton *)revealed;
-        NSRect bezel=[stopButton convertRect:[stopButton bezelRect] toView:stopButton.superview];
-        CGFloat barHeight=InlineStopBezelSize(stopButton.title).height,vertical=(capsuleFrame.size.height-NSHeight(bezel))/2;
-        NSRect dot=coordinator.revealDot.frame;
-        check(@"expanded_stop_is_drawn_like_the_bar_stop_with_even_insets",[stopButton isKindOfClass:CRDSessionStopButton.class]&&fabs(NSHeight(bezel)-barHeight)<.5&&
-            fabs(NSWidth(bezel)-NSWidth(stopButton.frame))<.5&&NSHeight(stopButton.frame)>=CRDStopHitHeight&&fabs(NSMinY(bezel)-vertical)<1&&
-            fabs((capsuleFrame.size.width-NSMaxX(bezel))-vertical)<1&&fabs((NSMinX(bezel)-NSMaxX(dot))-NSMinX(dot))<1&&NSMinX(bezel)>NSMaxX(dot));
+        NSRect pill=[revealed convertRect:[revealed pillRect] toView:revealed.superview],dot=coordinator.revealDot.frame;
+        CGFloat natural=StopPillSize(revealed.title,StopPillFont(NSFont.systemFontSize)).height;
+        check(@"capsule_layout_has_even_padding_and_dot_insets",fabs(NSHeight(pill)-natural)<.01&&fabs(NSMinY(pill)-CRDCapsulePadding)<.01&&
+            fabs(capsuleFrame.size.height-NSMaxY(pill)-CRDCapsulePadding)<.01&&fabs(capsuleFrame.size.width-NSMaxX(pill)-CRDCapsulePadding)<.01&&
+            fabs(NSMinX(dot)-CRDCapsuleDotInset)<.01&&fabs(NSMinX(pill)-NSMaxX(dot)-CRDCapsuleDotGap)<.01&&fabs(NSMidY(dot)-NSMidY(pill))<.01&&
+            fabs(NSMidY(revealed.frame)-capsuleFrame.size.height/2)<.01&&fabs(NSMaxX(revealed.frame)-capsuleFrame.size.width)<.01);
     }
-    check(@"capsule_expands_symmetrically_around_unchanged_dot",fabs(NSMidX(capsuleFrame)-NSMidX(mainBefore))<.1&&fabs(NSMidY(capsuleFrame)-NSMidY(mainBefore))<.1&&overlay.customView.suppressBackground&&fabs([((CRDBackground *)coordinator.stopRevealPanel.contentView).config[@"radius"] doubleValue]-capsuleFrame.size.height/2)<.1);
+    // Window origins are whole points, so the centers agree within half a point.
+    check(@"capsule_expands_symmetrically_around_unchanged_dot",fabs(NSMidX(capsuleFrame)-NSMidX(mainBefore))<=.51&&fabs(NSMidY(capsuleFrame)-NSMidY(mainBefore))<=.51&&overlay.customView.suppressBackground&&fabs([((CRDBackground *)coordinator.stopRevealPanel.contentView).config[@"radius"] doubleValue]-capsuleFrame.size.height/2)<.1);
     check(@"expanded_point_copies_dedicated_color",[coordinator.revealDot.textColor isEqual:overlay.dot.textColor]);
     check(@"expanded_dot_left_text_right_and_main_does_not_intercept",NSMidX(coordinator.revealDot.frame)<capsuleFrame.size.width/2&&NSMidX(revealed.frame)>capsuleFrame.size.width/2&&coordinator.revealDot.alphaValue==1&&overlay.dot.alphaValue==0&&overlay.controller.window.ignoresMouseEvents);
-    check(@"expanded_button_and_point_retain_safe_context_menu",[revealed menuForEvent:fixtureClick].numberOfItems==1&&[coordinator.revealDot menuForEvent:fixtureClick].numberOfItems==1);
+    check(@"expanded_button_and_point_retain_safe_context_menu",[revealed menuForEvent:rightClick].numberOfItems==1&&[coordinator.revealDot menuForEvent:rightClick].numberOfItems==1);
     check(@"context_menu_uses_native_font_and_readable_minimum",context.minimumWidth>=160&&context.font.pointSize==[NSFont menuFontOfSize:0].pointSize);
     [coordinator validateStopRevealForToken:tokenB modeSignature:coordinator.revealModeSignature windowDetected:YES];
     check(@"stop_reveal_closes_when_session_token_changes",coordinator.stopRevealPanel==nil&&coordinator.revealTimer==nil&&!overlay.customView.suppressBackground&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);
-    [overlay.controller.window setFrameOrigin:NSMakePoint(NSMaxX(visible)-40,NSMidY(visible))];
-    [coordinator presentStopRevealWithToken:tokenA]; RunFor(.3);
-    check(@"screen_edge_uses_menu_fallback_without_displacing_dot",coordinator.stopRevealPanel==nil&&!overlay.customView.suppressBackground&&!overlay.controller.window.ignoresMouseEvents&&overlay.dot.alphaValue==1);
+    // At an edge or a corner a double-click still opens the capsule, moved inside the visible frame
+    // over the dot's center, and the dot window keeps its place.
+    {
+        NSMutableDictionary *edgeSettings=[currentConfig mutableCopy]; edgeSettings[@"width"]=@17; edgeSettings[@"height"]=@17; apply(edgeSettings);
+        BOOL edgesOpen=YES,smallScreens=YES,motionFrames=YES,noWrites=YES;
+        NSData *configBytes=[NSData dataWithContentsOfFile:CRDConfigPath()];
+        fixtureStopToken=tokenA;
+        for(NSNumber *reduced in @[@NO,@YES]) {
+            fixtureReduceMotion=reduced;
+            for(NSValue *screen in @[[NSValue valueWithRect:visible],[NSValue valueWithRect:NSMakeRect(-320,-100,320,200)],
+                                     [NSValue valueWithRect:NSMakeRect(2000,0,100,30)]]) {
+                fixtureRevealVisibleFrame=screen; NSRect area=screen.rectValue;
+                CGFloat side=17;
+                for(NSValue *origin in @[at(NSMidX(area),NSMaxY(area)-side),at(NSMidX(area),NSMinY(area)),
+                    at(NSMinX(area),NSMidY(area)),at(NSMaxX(area)-side,NSMidY(area)),
+                    at(NSMinX(area),NSMinY(area)),at(NSMinX(area),NSMaxY(area)-side),
+                    at(NSMaxX(area)-side,NSMinY(area)),at(NSMaxX(area)-side,NSMaxY(area)-side),
+                    at(NSMinX(area)-side/2+1,NSMidY(area)),at(NSMaxX(area)+4,NSMidY(area))]) {
+                    [overlay.controller.window setFrame:NSMakeRect(origin.pointValue.x,origin.pointValue.y,side,side) display:NO];
+                    NSRect anchor=overlay.controller.window.frame;
+                    press(overlay.dot,NSMakePoint(8,8),@[],2);
+                    NSPanel *panel=coordinator.stopRevealPanel; CRDStatusDot *dot=coordinator.revealDot;
+                    waitForOpen(); NSRect frame=panel.frame;
+                    BOOL inside=panel!=nil&&NSContainsRect(area,frame);
+                    if(NSPointInRect(NSMakePoint(NSMidX(anchor),NSMidY(anchor)),area))
+                        inside=inside&&NSPointInRect(NSMakePoint(NSMidX(anchor),NSMidY(anchor)),frame);
+                    if(NSWidth(area)>=320) edgesOpen=edgesOpen&&inside; else smallScreens=smallScreens&&inside;
+                    motionFrames=motionFrames&&dot!=nil&&(NSIsEmptyRect(dot.frame)||NSMinX(dot.frame)<NSMinX(coordinator.revealStopButton.frame));
+                    [coordinator closeStopReveal:@"user-collapsed"]; waitForClose();
+                    if(!reduced.boolValue) motionFrames=motionFrames&&NSEqualRects(panel.frame,anchor)&&
+                        fabs(NSMidX(dot.frame)-NSWidth(anchor)/2)<.1&&fabs(NSMidY(dot.frame)-NSHeight(anchor)/2)<.1;
+                    noWrites=noWrites&&NSEqualRects(overlay.controller.window.frame,anchor)&&[edgeSettings isEqual:currentConfig]&&
+                        [[NSData dataWithContentsOfFile:CRDConfigPath()] isEqual:configBytes];
+                }
+            }
+        }
+        check(@"screen_edges_corners_and_offscreen_anchors_open_capsules",edgesOpen);
+        check(@"screens_smaller_than_the_natural_capsule_still_open_capsules",smallScreens);
+        check(@"edge_capsule_dot_slides_left_and_returns_to_the_original_anchor",motionFrames);
+        check(@"edge_capsule_never_moves_or_saves_the_original_window",noWrites);
+        fixtureRevealVisibleFrame=nil; fixtureReduceMotion=nil; fixtureStopToken=nil; apply(settingsBefore);
+    }
     [overlay.controller.window setFrame:mainBefore display:YES];
     [coordinator presentStopRevealWithToken:tokenA]; RunFor(.3);
     [coordinator validateStopRevealForToken:tokenA modeSignature:@"different-mode" windowDetected:YES];
@@ -2969,7 +3250,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     check(@"capsule_reentry_cancels_stale_animation_and_timeout",coordinator.stopRevealPanel!=stalePanel&&[coordinator.revealToken isEqual:tokenB]&&coordinator.revealTimer!=nil&&overlay.customView.suppressBackground);
     if(overlay.dot.dragWillBegin) overlay.dot.dragWillBegin();
     check(@"dot_drag_closes_capsule_before_moving",coordinator.stopRevealPanel==nil&&!overlay.customView.suppressBackground);
-    [coordinator presentStopRevealWithToken:tokenA]; NSMenu *replacementMenu=[overlay.dot menuForEvent:fixtureClick]; RunFor(.3);
+    [coordinator presentStopRevealWithToken:tokenA]; NSMenu *replacementMenu=[overlay.dot menuForEvent:rightClick]; RunFor(.3);
     check(@"context_reentry_cancels_capsule",replacementMenu.numberOfItems==8&&coordinator.stopRevealPanel==nil&&coordinator.revealTimer==nil&&!overlay.customView.suppressBackground);
     NSMutableDictionary *small=[reveal mutableCopy]; small[@"width"]=@7; small[@"height"]=@5; small[@"dotDiameter"]=@10;
     apply(small); NSRect exactOriginal=overlay.controller.window.frame; NSDictionary *exactSettings=[currentConfig copy];
@@ -2992,6 +3273,342 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     apply(reveal);
     [coordinator presentStopRevealWithToken:tokenA]; ReconcileFromConfig(); RunFor(.3);
     check(@"configuration_changes_cancel_stale_capsule_and_restore_hit_testing",coordinator.stopRevealPanel==nil&&!overlay.customView.suppressBackground&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);
+    // A double-click opens the Stop capsule on every shape, through the real views and the helper's
+    // own tracking loop, with or without the Control flag. Menus open only on a right mouse down;
+    // the fixture records them instead of showing them.
+    {
+        __block NSUInteger menusShown=0; __block NSMenu *lastMenu=nil;
+        fixturePresentMenu=^(NSMenu *menu,NSEvent *event,NSView *view){ menusShown++; lastMenu=menu; };
+        fixtureStopToken=tokenA;
+        auto flagged=[](NSEventType type,NSPoint point,NSInteger count,NSTimeInterval timestamp,NSEventModifierFlags flags)->NSEvent * {
+            return [NSEvent mouseEventWithType:type location:point modifierFlags:flags timestamp:timestamp windowNumber:0 context:nil eventNumber:1 clickCount:count pressure:type==NSEventTypeLeftMouseUp?0:1];
+        };
+        // A press at a point and its release there, with modifier flags on both.
+        auto pressFlagged=[&](NSView *view,NSPoint point,NSInteger count,NSEventModifierFlags flags) {
+            [trackingQueue removeAllObjects]; [trackingQueue addObject:flagged(NSEventTypeLeftMouseUp,point,count,0,flags)];
+            [view mouseDown:flagged(NSEventTypeLeftMouseDown,point,count,0,flags)];
+        };
+        NSMutableArray<NSDictionary *> *shapeList=[NSMutableArray array];
+        for(NSDictionary *shape in Schema()[@"shapes"]) if(![shape[@"id"] isEqual:@"custom"]) [shapeList addObject:@{@"id":shape[@"id"],@"values":shape[@"values"]}];
+        [shapeList addObject:@{@"id":@"custom",@"values":@{@"layout":@"row",@"width":@260,@"height":@36,@"radius":@8,@"showText":@NO,@"showStopButton":@YES,@"showDot":@YES}}];
+        BOOL everyShapeOpens=YES,controlOpens=YES,noMenuOnLeft=YES,foldRestores=YES,stopDisabledWhileOpening=YES,openingNeverPresses=YES;
+        NSMutableSet<NSString *> *capsuleSizes=[NSMutableSet set];
+        for(NSDictionary *shape in shapeList) {
+            NSMutableDictionary *values=[CRDDefaults() mutableCopy]; [values addEntriesFromDictionary:shape[@"values"]];
+            values[@"mode"]=@"custom"; values[@"shape"]=shape[@"id"]; values[@"placement"]=@"center"; values[@"stopRevealSeconds"]=@30; apply(values); // A long fold delay: no timeout during the checks, and a fold timer that marks the end of the opening.
+            BOOL dotLayout=[values[@"layout"] isEqual:@"dot"];
+            NSView *target=dotLayout?overlay.dot:overlay.customView;
+            NSPoint point=NSMakePoint(NSWidth(overlay.customView.bounds)*.2,NSHeight(overlay.customView.bounds)*.5);
+            if(!dotLayout&&[overlay.customView hitTest:point]!=overlay.customView) everyShapeOpens=NO; // The point is background, never Stop.
+            NSRect frameBefore=overlay.controller.window.frame; CGFloat alphaBefore=overlay.controller.window.alphaValue;
+            for(NSNumber *control in @[@NO,@YES]) {
+                NSEventModifierFlags flags=control.boolValue?NSEventModifierFlagControl:0;
+                NSUInteger menusBefore=menusShown;
+                if([target menuForEvent:flagged(NSEventTypeLeftMouseDown,point,2,0,flags)]!=nil) noMenuOnLeft=NO;
+                pressFlagged(target,point,1,flags);
+                BOOL singleIgnored=coordinator.stopRevealPanel==nil;
+                pressFlagged(target,point,2,flags);
+                CRDSessionStopButton *capsuleStop=coordinator.revealStopButton;
+                BOOL opened=coordinator.stopRevealPanel!=nil&&singleIgnored&&trackingQueue.count==0&&menusShown==menusBefore;
+                if(!opened) { if(control.boolValue) controlOpens=NO; else everyShapeOpens=NO; continue; }
+                if(capsuleStop.enabled) stopDisabledWhileOpening=NO;
+                // The opening double-click, and a quick click after it, can never press the capsule's Stop.
+                capsuleStop.enabled=YES;
+                if([capsuleStop acceptsPress:mouseAt(NSEventTypeLeftMouseDown,NSZeroPoint,2,0,0)]||[capsuleStop acceptsPress:mouseAt(NSEventTypeLeftMouseDown,NSZeroPoint,1,NSEvent.doubleClickInterval/2,0)]) openingNeverPresses=NO;
+                capsuleStop.enabled=NO;
+                waitForOpen();
+                if(!dotLayout&&(overlay.controller.window.alphaValue!=0||!overlay.controller.window.ignoresMouseEvents)) everyShapeOpens=NO;
+                [capsuleSizes addObject:NSStringFromSize(coordinator.stopRevealPanel.frame.size)];
+                CRDBackground *capsuleBackground=(CRDBackground *)coordinator.stopRevealPanel.contentView;
+                pressFlagged(capsuleBackground,NSMakePoint(2,NSMidY(capsuleBackground.bounds)),2,flags); waitForClose();
+                if(coordinator.stopRevealPanel||!NSEqualRects(overlay.controller.window.frame,frameBefore)||overlay.controller.window.alphaValue!=alphaBefore||
+                   overlay.controller.window.ignoresMouseEvents||overlay.customView.suppressBackground||inlineStopGate.blockedThrough<NSProcessInfo.processInfo.systemUptime) foldRestores=NO;
+            }
+        }
+        check(@"double_click_on_every_shape_opens_the_stop_capsule",everyShapeOpens);
+        check(@"control_double_click_opens_the_capsule_and_no_menu",controlOpens&&noMenuOnLeft&&menusShown==0);
+        check(@"opening_double_click_never_presses_stop",openingNeverPresses);
+        check(@"capsule_stop_is_disabled_while_the_capsule_opens",stopDisabledWhileOpening);
+        check(@"folding_returns_the_window_to_its_shape_and_gates_the_inline_stop",foldRestores);
+        // The dot layout's own dot changes the capsule's height only when it is taller than the pill.
+        check(@"capsule_is_the_same_on_every_shape_but_the_dot",capsuleSizes.count<=2);
+        // The grips: a double-click that neither moves nor resizes opens the capsule too.
+        NSMutableDictionary *bar=[CRDDefaults() mutableCopy]; bar[@"mode"]=@"custom"; bar[@"placement"]=@"center"; bar[@"stopRevealSeconds"]=@0; apply(bar);
+        BOOL grips=YES;
+        for(CRDDragHandle *grip in @[overlay.handle,overlay.resizeHandle]) {
+            NSRect before=overlay.controller.window.frame;
+            pressFlagged(grip,NSMakePoint(NSMidX(grip.bounds),NSMidY(grip.bounds)),2,0);
+            if(!coordinator.stopRevealPanel||!NSEqualRects(before,overlay.controller.window.frame)) grips=NO;
+            [coordinator closeStopReveal:@"fixture"];
+        }
+        check(@"double_click_on_either_grip_opens_the_capsule",grips);
+        // Remote pointer jitter must neither move nor resize the original, on either click.
+        // Larger movement still drags/resizes, even when macOS reports clickCount 2.
+        BOOL jitterOpens=YES,largeDrags=YES,lockedRelease=YES;
+        for(NSView *view in @[overlay.customView,overlay.dot,overlay.handle,overlay.resizeHandle]) {
+            NSMutableDictionary *values=[bar mutableCopy]; values[@"layout"]=view==overlay.dot?@"dot":@"row";
+            values[@"width"]=@300; values[@"height"]=@60; values[@"draggable"]=@YES; values[@"resizable"]=@YES; values[@"constrainToScreen"]=@NO;
+            apply(values); NSRect before=overlay.controller.window.frame; InvalidateGeometry();
+            for(NSInteger count=1;count<=2;count++) press(view,NSMakePoint(2,2),@[at(3,3),at(6,6)],count);
+            jitterOpens=jitterOpens&&coordinator.stopRevealPanel!=nil&&NSEqualRects(before,overlay.controller.window.frame)&&!geometryDirty;
+            [coordinator closeStopReveal:@"fixture"];
+            press(view,NSMakePoint(2,2),@[at(14,-10)],2);
+            largeDrags=largeDrags&&!NSEqualRects(before,overlay.controller.window.frame)&&coordinator.stopRevealPanel==nil;
+            // A stationary double-click immediately after a drag must open normally.
+            press(view,NSMakePoint(2,2),@[],2);
+            largeDrags=largeDrags&&coordinator.stopRevealPanel!=nil; [coordinator closeStopReveal:@"fixture"];
+        }
+        check(@"four_point_remote_jitter_keeps_double_clicks_on_all_grips_and_shapes",jitterOpens);
+        check(@"larger_drags_and_resizes_stay_gestures_and_the_next_double_click_opens",largeDrags);
+        // A one-point remote wobble on either click stays a click on every resize grip;
+        // a deliberate resize still captures geometry and never opens Stop.
+        BOOL resizeJitter=YES,resizeDrag=YES;
+        for(NSDictionary *shape in Schema()[@"shapes"]) {
+            NSMutableDictionary *values=[bar mutableCopy]; [values addEntriesFromDictionary:shape[@"values"]];
+            values[@"resizable"]=@YES; apply(values);
+            if(overlay.resizeHandle.hidden) continue;
+            NSRect before=overlay.controller.window.frame;
+            previewMode=NO; overlay.shown=YES;
+            for(NSInteger count=1;count<=2;count++) press(overlay.resizeHandle,NSMakePoint(2,2),@[at(3,2)],count);
+            resizeJitter=resizeJitter&&coordinator.stopRevealPanel!=nil&&NSEqualRects(before,overlay.controller.window.frame)&&!geometryDirty;
+            [coordinator closeStopReveal:@"fixture"];
+            apply(values);
+            press(overlay.resizeHandle,NSMakePoint(2,2),@[at(12,-8)],2);
+            resizeDrag=resizeDrag&&coordinator.stopRevealPanel==nil&&geometryDirty&&fabs(NSWidth(overlay.controller.window.frame)-NSWidth(before)-10)<.01;
+            InvalidateGeometry(); previewMode=YES; overlay.shown=NO;
+        }
+        check(@"resize_grip_one_point_jitter_opens_capsule_without_saving_geometry",resizeJitter);
+        check(@"resize_grip_real_drag_saves_geometry_instead_of_opening_capsule",resizeDrag);
+        bar[@"resizable"]=@NO; apply(bar);
+        press(overlay.resizeHandle,NSMakePoint(2,2),@[],2);
+        lockedRelease=coordinator.stopRevealPanel!=nil&&trackingQueue.count==0;
+        check(@"locked_resize_grip_waits_for_mouse_up_before_opening",lockedRelease);
+        [coordinator closeStopReveal:@"fixture"];
+        // A new gesture during the closing animation belongs to the original window. The old
+        // completion cannot close the newly opened capsule; its fresh gate still rejects continuations.
+        fixtureReduceMotion=@NO; apply(reveal);
+        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; waitForOpen();
+        NSPanel *closing=coordinator.stopRevealPanel;
+        [coordinator closeStopReveal:@"user-collapsed"];
+        BOOL acceptsReopen=closing.ignoresMouseEvents&&!overlay.controller.window.ignoresMouseEvents;
+        if(acceptsReopen) press(overlay.dot,NSMakePoint(2,2),@[],2);
+        NSPanel *reopened=coordinator.stopRevealPanel; RunFor(.3);
+        check(@"double_click_during_close_reopens_without_a_stale_completion",acceptsReopen&&reopened!=closing&&coordinator.stopRevealPanel==reopened&&coordinator.revealStopButton.stopGestureGate!=nil);
+        [coordinator closeStopReveal:@"fixture"]; fixtureReduceMotion=@YES;
+        // Missing Stop is a disabled capsule, not a lost double-click. A new target closes it,
+        // so the button never silently becomes armed while the pointer is already over it.
+        fixtureStopToken=nil; apply(reveal); press(overlay.dot,NSMakePoint(2,2),@[],2);
+        BOOL unavailableOpens=coordinator.stopRevealPanel!=nil&&!coordinator.revealStopButton.enabled&&!coordinator.revealStopButton.sessionToken;
+        [coordinator validateStopRevealForToken:nil modeSignature:coordinator.revealModeSignature windowDetected:YES];
+        unavailableOpens=unavailableOpens&&coordinator.stopRevealPanel!=nil;
+        [coordinator validateStopRevealForToken:tokenA modeSignature:coordinator.revealModeSignature windowDetected:YES];
+        check(@"unavailable_stop_opens_disabled_and_target_change_closes_it",unavailableOpens&&coordinator.stopRevealPanel==nil);
+        fixtureStopToken=tokenA;
+        for(NSString *layout in @[@"row",@"column",@"dot"]) {
+            NSMutableDictionary *values=[bar mutableCopy]; values[@"layout"]=layout; values[@"width"]=@300; values[@"height"]=@120; values[@"showDot"]=@NO; apply(values);
+            press(overlay.customView,NSMakePoint(2,2),@[],2);
+            check(@"hidden_dot_keeps_background_double_click_available",coordinator.stopRevealPanel!=nil&&!coordinator.revealDot.hidden);
+            [coordinator closeStopReveal:@"fixture"];
+            if(![layout isEqual:@"dot"]) {
+                values[@"showDot"]=@YES; apply(values);
+                NSPoint point=NSMakePoint(NSMidX(overlay.dot.frame),NSMidY(overlay.dot.frame));
+                NSView *hit=[overlay.customView hitTest:point]; press(hit,point,@[],2);
+                check(@"inline_dot_passes_double_click_to_the_background",!overlay.dot.hidden&&hit==overlay.customView&&coordinator.stopRevealPanel!=nil);
+                [coordinator closeStopReveal:@"fixture"];
+            }
+        }
+        // All shapes keep a visible, correctly colored fold dot with showDot off. Manual
+        // duration must be foldable from the background outside Stop and its margin.
+        BOOL hiddenDotFolds=YES,hiddenDotMetrics=YES,visibleDotMetrics=YES;
+        for(NSNumber *reduced in @[@NO,@YES]) for(NSDictionary *shape in Schema()[@"shapes"]) {
+            fixtureReduceMotion=reduced;
+            NSMutableDictionary *values=[bar mutableCopy]; [values addEntriesFromDictionary:shape[@"values"]];
+            values[@"showDot"]=@NO; values[@"stopRevealSeconds"]=@0; apply(values);
+            press(overlay.customView,NSMakePoint(2,2),@[],2); waitForOpen();
+            CRDStatusDot *dot=coordinator.revealDot; NSPanel *capsule=coordinator.stopRevealPanel;
+            NSPoint fold=NSMakePoint(NSMinX(dot.frame)+1,NSMidY(dot.frame));
+            hiddenDotMetrics=hiddenDotMetrics&&capsule&&!dot.hidden&&NSWidth(dot.frame)==12&&dot.dotDiameter==12&&
+                [dot.textColor isEqual:overlay.dot.textColor]&&!NSPointInRect(fold,coordinator.revealStopZone)&&!coordinator.revealTimer;
+            press(capsule.contentView,fold,@[],2); waitForClose();
+            hiddenDotFolds=hiddenDotFolds&&coordinator.stopRevealPanel==nil&&!overlay.controller.window.ignoresMouseEvents;
+            [coordinator closeStopReveal:@"fixture"];
+            values[@"showDot"]=@YES; values[@"dotDiameter"]=@24; apply(values);
+            [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+            CGFloat expected=[currentConfig[@"layout"] isEqual:@"dot"]?MIN(24,MIN(NSWidth(overlay.controller.window.frame),NSHeight(overlay.controller.window.frame))):12;
+            visibleDotMetrics=visibleDotMetrics&&!coordinator.revealDot.hidden&&coordinator.revealDot.dotDiameter==expected&&NSWidth(coordinator.revealDot.frame)==expected;
+            [coordinator closeStopReveal:@"fixture"];
+        }
+        check(@"hidden_dot_capsules_keep_twelve_point_colored_fold_target_on_every_shape",hiddenDotMetrics);
+        check(@"hidden_dot_manual_capsules_fold_outside_stop_in_both_motion_modes",hiddenDotFolds);
+        check(@"only_visible_dot_layout_uses_the_original_dot_diameter",visibleDotMetrics);
+        // Exercise the screen-notification handler itself. The real offscreen anchor is
+        // displaced so its layout notification can observe whether the capsule closed first.
+        BOOL screenCloses=YES,screenBeforeLayout=YES,screenKeepsConfig=YES;
+        for(NSNumber *reduced in @[@NO,@YES]) for(NSValue *oldVisible in @[[NSValue valueWithRect:NSMakeRect(0,0,1440,876)],
+            [NSValue valueWithRect:NSMakeRect(0,0,1366,744)],[NSValue valueWithRect:NSMakeRect(-1440,0,1440,876)]]) {
+            fixtureReduceMotion=reduced; fixtureRevealVisibleFrame=oldVisible;
+            apply(reveal); NSRect configured=overlay.controller.window.frame;
+            [overlay.controller.window setFrameOrigin:NSMakePoint(NSMaxX(oldVisible.rectValue)-40,NSMaxY(oldVisible.rectValue)-40)];
+            [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+            NSString *signature=FileSignature(); NSDictionary *config=currentConfig;
+            __block BOOL sawLayout=NO,closedAtLayout=YES;
+            id observer=[NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidMoveNotification object:overlay.controller.window queue:nil usingBlock:^(NSNotification *note){
+                sawLayout=YES; closedAtLayout=closedAtLayout&&coordinator.stopRevealPanel==nil;
+            }];
+            [coordinator screenParametersChanged];
+            [NSNotificationCenter.defaultCenter removeObserver:observer];
+            NSDictionary *status=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"runtime-status.json"]] options:0 error:nil];
+            screenBeforeLayout=screenBeforeLayout&&sawLayout&&closedAtLayout;
+            screenCloses=screenCloses&&!coordinator.stopRevealPanel&&!coordinator.revealTimer&&!coordinator.revealInputMonitor&&!overlay.controller.window.ignoresMouseEvents&&NSEqualRects(configured,overlay.controller.window.frame);
+            screenKeepsConfig=screenKeepsConfig&&!geometryDirty&&[currentConfig isEqual:config]&&[FileSignature() isEqual:signature]&&[status[@"lastEvent"] isEqual:@"stop-reveal-closed-screens-changed"];
+            [coordinator closeStopReveal:@"fixture"];
+        }
+        fixtureRevealVisibleFrame=nil;
+        check(@"screen_change_closes_capsule_before_repositioning_the_anchor",screenCloses&&screenBeforeLayout);
+        check(@"screen_change_does_not_persist_geometry_or_change_config",screenKeepsConfig);
+        for(NSDictionary *change in @[@{@"mode":@"original"},@{@"enabled":@NO}]) {
+            NSMutableDictionary *values=[bar mutableCopy]; [values addEntriesFromDictionary:change]; apply(values);
+            press(overlay.customView,NSMakePoint(2,2),@[],2);
+            check(@"non_custom_effective_mode_cannot_open_a_capsule",coordinator.stopRevealPanel==nil);
+        }
+        fixtureReduceMotion=nil; bar[@"resizable"]=@YES; apply(bar);
+        // A right mouse down opens the window menu on the background and the grips, and the one-item
+        // Stop menu on the capsule's Stop and dot; it never opens the capsule. A Control-left event
+        // asks no view for a menu.
+        NSEvent *controlLeft=flagged(NSEventTypeLeftMouseDown,NSMakePoint(20,20),1,0,NSEventModifierFlagControl);
+        BOOL rightOpensMenus=YES;
+        for(NSView *view in @[overlay.customView,overlay.handle,overlay.resizeHandle]) {
+            NSUInteger before=menusShown; [view rightMouseDown:rightClick];
+            if(menusShown!=before+1||lastMenu.numberOfItems!=8||coordinator.stopRevealPanel) rightOpensMenus=NO;
+        }
+        BOOL leftNeverAsks=[overlay.customView menuForEvent:controlLeft]==nil&&[overlay.handle menuForEvent:controlLeft]==nil&&[overlay.resizeHandle menuForEvent:controlLeft]==nil&&
+            [overlay.stop menuForEvent:controlLeft]==nil&&[overlay.customView menuForEvent:fixtureClick]==nil;
+        [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+        for(NSView *view in @[(NSView *)coordinator.revealStopButton,(NSView *)coordinator.revealDot]) {
+            NSUInteger before=menusShown; [view rightMouseDown:rightClick];
+            if(menusShown!=before+1||lastMenu.numberOfItems!=1) rightOpensMenus=NO;
+            if([view menuForEvent:controlLeft]!=nil) leftNeverAsks=NO;
+        }
+        [coordinator closeStopReveal:@"fixture"];
+        apply(reveal); NSUInteger dotBefore=menusShown; [overlay.dot rightMouseDown:rightClick];
+        if(menusShown!=dotBefore+1||lastMenu.numberOfItems!=8||coordinator.stopRevealPanel) rightOpensMenus=NO;
+        if([overlay.dot menuForEvent:controlLeft]!=nil) leftNeverAsks=NO;
+        check(@"right_click_opens_the_menu_and_never_the_capsule",rightOpensMenus);
+        check(@"left_events_never_ask_any_view_for_a_menu",leftNeverAsks);
+        // The panels hand AppKit left events without the Control flag; every other event is unchanged.
+        NSEvent *controlDouble=flagged(NSEventTypeLeftMouseDown,NSMakePoint(7,9),2,3.5,NSEventModifierFlagControl|NSEventModifierFlagShift);
+        NSEvent *cleaned=LeftClickWithoutControl(controlDouble);
+        check(@"panels_remove_the_control_flag_from_left_events_only",cleaned.type==NSEventTypeLeftMouseDown&&cleaned.clickCount==2&&cleaned.timestamp==3.5&&
+            NSEqualPoints(cleaned.locationInWindow,NSMakePoint(7,9))&&!(cleaned.modifierFlags&NSEventModifierFlagControl)&&(cleaned.modifierFlags&NSEventModifierFlagShift)&&
+            !(LeftClickWithoutControl(flagged(NSEventTypeLeftMouseUp,NSZeroPoint,2,0,NSEventModifierFlagControl)).modifierFlags&NSEventModifierFlagControl)&&
+            LeftClickWithoutControl(rightClick)==rightClick&&LeftClickWithoutControl(fixtureClick)==fixtureClick&&
+            ([CRDOverlayPanel instanceMethodForSelector:@selector(sendEvent:)]!=[NSPanel instanceMethodForSelector:@selector(sendEvent:)]));
+        fixturePresentMenu=nil; fixtureStopToken=nil;
+    }
+    // The Stop pill: one red with white text above 4.5:1, darker when pressed, faded when disabled,
+    // a press area at least the size of a native rounded button with the same title, and a height that fits short windows.
+    {
+        auto luminance=[](NSColor *color)->double {
+            NSColor *c=[color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+            auto channel=[](double v){ return v<=.04045?v/12.92:pow((v+.055)/1.055,2.4); };
+            return .2126*channel(c.redComponent)+.7152*channel(c.greenComponent)+.0722*channel(c.blueComponent);
+        };
+        double contrast=1.05/(luminance(StopPillFill(@"red",YES,NO))+.05),pressedContrast=1.05/(luminance(StopPillFill(@"red",YES,YES))+.05);
+        NSColor *red=[StopPillFill(@"red",YES,NO) colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        check(@"stop_pill_red_keeps_white_text_above_4_5_to_1",contrast>=4.5&&pressedContrast>contrast&&fabs(red.redComponent*255-0xD9)<.5&&fabs(red.greenComponent*255-0x30)<.5&&fabs(red.blueComponent*255-0x36)<.5&&
+            [StopPillTitleColor(@"red",YES,NO) isEqual:NSColor.whiteColor]&&StopPillFill(@"red",NO,NO).alphaComponent<.5&&StopPillTitleColor(@"red",NO,NO).alphaComponent<1);
+        // The grey style, resolved in each look: red text on a grey pill at 4.5:1 or more, pressed
+        // included; a pressed fill that differs from the resting one; faded colors when disabled.
+        {
+            auto resolved=[](NSColor *color,NSString *look)->NSColor * {
+                __block NSColor *result=nil;
+                [[NSAppearance appearanceNamed:[look isEqual:@"dark"]?NSAppearanceNameDarkAqua:NSAppearanceNameAqua] performAsCurrentDrawingAppearance:^{ result=[color colorUsingColorSpace:NSColorSpace.sRGBColorSpace]; }];
+                return result;
+            };
+            auto ratio=[&](NSColor *a,NSColor *b,NSString *look) {
+                double x=luminance(resolved(a,look)),y=luminance(resolved(b,look));
+                return (MAX(x,y)+.05)/(MIN(x,y)+.05);
+            };
+            BOOL grayReadable=YES,grayHues=YES,grayStates=YES;
+            for(NSString *look in @[@"light",@"dark"]) {
+                if(ratio(StopPillTitleColor(@"gray",YES,NO),StopPillFill(@"gray",YES,NO),look)<4.5||ratio(StopPillTitleColor(@"gray",YES,YES),StopPillFill(@"gray",YES,YES),look)<4.5) grayReadable=NO;
+                NSColor *fill=resolved(StopPillFill(@"gray",YES,NO),look),*text=resolved(StopPillTitleColor(@"gray",YES,NO),look),*pressed=resolved(StopPillFill(@"gray",YES,YES),look);
+                if(fabs(fill.redComponent-fill.greenComponent)>.03||fabs(fill.greenComponent-fill.blueComponent)>.03||text.redComponent-text.greenComponent<.3||text.redComponent-text.blueComponent<.3) grayHues=NO;
+                if(fabs(pressed.redComponent-fill.redComponent)<.02||resolved(StopPillFill(@"gray",NO,NO),look).alphaComponent>=1||resolved(StopPillTitleColor(@"gray",NO,NO),look).alphaComponent>=.6) grayStates=NO;
+            }
+            BOOL looksDiffer=resolved(StopPillFill(@"gray",YES,NO),@"light").redComponent>resolved(StopPillFill(@"gray",YES,NO),@"dark").redComponent+.4;
+            check(@"stop_pill_gray_keeps_red_text_above_4_5_to_1_in_light_and_dark",grayReadable&&grayHues&&grayStates&&looksDiffer);
+            NSColor *unknown=[StopPillFill(@"unknown",YES,NO) colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+            check(@"stop_style_is_validated_and_defaults_to_red",[CRDDefaults()[@"stopStyle"] isEqual:@"red"]&&[ChoiceIDs(@"stopStyle") isEqual:(@[@"red",@"gray"])]&&
+                Validate(@{@"stopStyle":@"gray"},nil)!=nil&&Validate(@{@"stopStyle":@"blue"},nil)==nil&&Validate(@{@"stopStyle":@1},nil)==nil&&[unknown isEqual:red]&&
+                [PresetValues(@{@"stopStyle":@"gray"})[@"stopStyle"] isEqual:@"gray"]);
+        }
+        NSMutableDictionary *bar=[CRDDefaults() mutableCopy]; bar[@"mode"]=@"custom"; bar[@"accent"]=@"green"; bar[@"borderWidth"]=@2;
+        BOOL atLeastNative=YES,accentFree=YES; NSColor *firstEdge=nil;
+        for(NSString *language in @[@"ko",@"en"]) for(NSString *look in @[@"light",@"dark"]) {
+            fixtureLanguage=language; bar[@"appearance"]=look; apply(bar);
+            NSButton *native=[NSButton buttonWithTitle:overlay.stop.title target:nil action:nil]; native.bezelStyle=NSBezelStyleRounded; native.font=[NSFont systemFontOfSize:NSFont.systemFontSize]; [native sizeToFit];
+            if(NSWidth(overlay.stop.frame)<NSWidth(native.frame)||NSHeight(overlay.stop.frame)<MAX(24,NSHeight(native.frame))) atLeastNative=NO;
+            // The pill draws its red in both looks; the accent colors only the dot and the border.
+            overlay.stop.enabled=YES;
+            NSBitmapImageRep *raster=[overlay.stop bitmapImageRepForCachingDisplayInRect:overlay.stop.bounds]; [overlay.stop cacheDisplayInRect:overlay.stop.bounds toBitmapImageRep:raster];
+            NSColor *edge=[[raster colorAtX:(NSInteger)(raster.pixelsWide*.08) y:raster.pixelsHigh/2] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+            // The cache bitmap uses the display's color space, so the sample is compared with the
+            // first look and checked for a red hue rather than for the exact sRGB value.
+            if(!firstEdge) firstEdge=edge;
+            if(edge.redComponent<.7||edge.greenComponent>.35||edge.blueComponent>.35||fabs(edge.redComponent-firstEdge.redComponent)>.01||
+               fabs(edge.greenComponent-firstEdge.greenComponent)>.01||fabs(edge.blueComponent-firstEdge.blueComponent)>.01) accentFree=NO;
+            overlay.stop.enabled=NO;
+        }
+        fixtureLanguage=nil;
+        check(@"inline_stop_pill_press_area_is_at_least_the_native_button",atLeastNative);
+        // Every built-in shape keeps its dot, its caption and its Stop pill, in both languages.
+        BOOL shapesKeepControls=YES;
+        for(NSString *language in @[@"ko",@"en"]) for(NSDictionary *shape in Schema()[@"shapes"]) {
+            if([shape[@"id"] isEqual:@"custom"]||[shape[@"values"][@"layout"] isEqual:@"dot"]) continue;
+            fixtureLanguage=language; NSMutableDictionary *values=[CRDDefaults() mutableCopy]; [values addEntriesFromDictionary:shape[@"values"]]; values[@"mode"]=@"custom"; apply(values);
+            if(overlay.dot.hidden||overlay.stop.hidden||overlay.label.hidden!=![values[@"showText"] boolValue]||NSIntersectsRect(overlay.dot.frame,overlay.stop.frame)) shapesKeepControls=NO;
+        }
+        fixtureLanguage=nil;
+        check(@"every_shape_keeps_its_dot_caption_and_stop",shapesKeepControls);
+        // The grey style keeps every inline Stop frame of the red one, and draws a grey pill whose
+        // shade follows the look.
+        BOOL sameFrames=YES,grayRaster=YES; NSColor *lightGray=nil,*darkGray=nil;
+        for(NSString *language in @[@"ko",@"en"]) for(NSDictionary *shape in Schema()[@"shapes"]) {
+            if([shape[@"id"] isEqual:@"custom"]||[shape[@"values"][@"layout"] isEqual:@"dot"]) continue;
+            fixtureLanguage=language; NSMutableDictionary *values=[CRDDefaults() mutableCopy]; [values addEntriesFromDictionary:shape[@"values"]]; values[@"mode"]=@"custom";
+            apply(values); NSRect redFrame=overlay.stop.frame;
+            values[@"stopStyle"]=@"gray"; apply(values);
+            if(!NSEqualRects(redFrame,overlay.stop.frame)||![((CRDSessionStopButton *)overlay.stop).stopStyle isEqual:@"gray"]) sameFrames=NO;
+        }
+        for(NSString *look in @[@"light",@"dark"]) {
+            NSMutableDictionary *grayBar=[bar mutableCopy]; grayBar[@"appearance"]=look; grayBar[@"stopStyle"]=@"gray"; apply(grayBar); overlay.stop.enabled=YES;
+            NSBitmapImageRep *raster=[overlay.stop bitmapImageRepForCachingDisplayInRect:overlay.stop.bounds]; [overlay.stop cacheDisplayInRect:overlay.stop.bounds toBitmapImageRep:raster];
+            NSColor *edge=[[raster colorAtX:(NSInteger)(raster.pixelsWide*.08) y:raster.pixelsHigh/2] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+            if(fabs(edge.redComponent-edge.greenComponent)>.05||fabs(edge.greenComponent-edge.blueComponent)>.05) grayRaster=NO;
+            if([look isEqual:@"light"]) lightGray=edge; else darkGray=edge;
+            overlay.stop.enabled=NO;
+        }
+        fixtureLanguage=nil;
+        check(@"gray_stop_keeps_every_inline_frame_and_draws_grey_in_both_looks",sameFrames&&grayRaster&&lightGray.redComponent>darkGray.redComponent+.3);
+        check(@"stop_pill_is_red_in_light_and_dark_whatever_the_accent",accentFree);
+        NSMutableDictionary *shortBar=[bar mutableCopy]; shortBar[@"height"]=@26; shortBar[@"shape"]=@"custom"; apply(shortBar);
+        BOOL shortFits=!overlay.stop.hidden&&NSHeight(overlay.stop.frame)==26;
+        shortBar[@"height"]=@22; apply(shortBar); BOOL tooShortHides=overlay.stop.hidden;
+        NSMutableDictionary *longLabel=[bar mutableCopy]; longLabel[@"buttonText"]=[@"" stringByPaddingToLength:120 withString:@"공유 중지 " startingAtIndex:0]; apply(longLabel);
+        BOOL inlineClamped=!overlay.stop.hidden&&NSMaxX(overlay.stop.frame)<=NSWidth(overlay.customView.bounds);
+        CRDCapsuleLayout longCapsule=CapsuleLayout(StopPillSize(overlay.stop.title,StopPillFont(NSFont.systemFontSize)),CRDCapsuleDotDiameter);
+        check(@"stop_pill_fits_short_windows_and_long_labels",shortFits&&tooShortHides&&inlineClamped&&NSWidth(longCapsule.pill)==CRDCapsulePillMaximumWidth);
+        // The capsule layout: 6 pt around the pill, a 12 pt dot 12 pt from the left end and
+        // 10 pt before the pill, everything centered, and a press area of at least 120 x 36 pt.
+        CRDCapsuleLayout layout=CapsuleLayout(StopPillSize(L(@"공유 중지"),StopPillFont(NSFont.systemFontSize)),CRDCapsuleDotDiameter);
+        CRDCapsuleLayout fallbackDot=CapsuleLayout(StopPillSize(L(@"공유 중지"),StopPillFont(NSFont.systemFontSize)),0);
+        check(@"capsule_layout_metrics",NSMinY(layout.pill)==6&&layout.size.height-NSMaxY(layout.pill)==6&&layout.size.width-NSMaxX(layout.pill)==6&&
+            NSMinX(layout.dot)==12&&NSWidth(layout.dot)==12&&NSMinX(layout.pill)-NSMaxX(layout.dot)==10&&NSMidY(layout.dot)==NSMidY(layout.pill)&&NSMidY(layout.pill)==layout.size.height/2&&
+            NSWidth(layout.press)>=CRDStopHitWidth&&NSHeight(layout.press)>=CRDStopHitHeight&&NSContainsRect(layout.press,layout.pill)&&NSMaxX(layout.press)==layout.size.width&&NSMinX(layout.press)>NSMaxX(layout.dot)&&
+            NSEqualRects(fallbackDot.dot,layout.dot)&&NSEqualRects(fallbackDot.press,layout.press));
+        apply(reveal);
+    }
     // Verify an actual comparable JSONL record, including explicit prior geometry settings.
     eventLog=[[CRDEventLog alloc] initWithPath:[dir stringByAppendingPathComponent:@"comparison/events.jsonl"]];
     NSMutableDictionary *before=[currentConfig mutableCopy]; before[@"width"]=@111; before[@"text"]=@"SECRET-CONNECTION-TEXT"; before[@"buttonText"]=@"SECRET-BUTTON-TEXT"; currentConfig=before;
@@ -3235,6 +3852,26 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     [trackingButton mouseDown:down];
     check(@"native_tracking_reproduces_mutable_token_bug_without_showing_window",SameStopToken(recorder.legacyReceived,tokenB)&&!trackingWindow.visible);
     check(@"native_tracking_pins_mousedown_token_and_clears_after_action",SameStopToken(recorder.received,tokenA)&&trackingButton.gestureToken==nil&&![trackingButton actionToken]);
+    // The refused down returns immediately, but AppKit later delivers its release to the
+    // button. A reset click count cannot turn that same continuing gesture into Stop.
+    trackingButton.stopGestureGate=[CRDStopGestureGate new];
+    [trackingButton.stopGestureGate blockFrom:100];
+    trackingCell.duringTracking=^{}; recorder.received=nil;
+    auto inlineEvent=[&](NSEventType type,NSTimeInterval timestamp) {
+        return mouseAt(type,down.locationInWindow,1,timestamp,trackingWindow.windowNumber);
+    };
+    [trackingButton mouseDown:inlineEvent(NSEventTypeLeftMouseDown,100.1)];
+    [trackingButton mouseUp:inlineEvent(NSEventTypeLeftMouseUp,102)];
+    NSTimeInterval afterDelayedUp=trackingButton.stopGestureGate.blockedThrough;
+    [trackingButton mouseDown:inlineEvent(NSEventTypeLeftMouseDown,102.01)];
+    [trackingButton mouseUp:inlineEvent(NSEventTypeLeftMouseUp,102.05)];
+    BOOL continuationRejected=recorder.received==nil;
+    [trackingButton mouseDown:inlineEvent(NSEventTypeLeftMouseDown,102.05+NSEvent.doubleClickInterval+.01)];
+    check(@"inline_rejected_release_blocks_reset_click_count_then_accepts_deliberate_click",
+        afterDelayedUp>=102+NSEvent.doubleClickInterval&&continuationRejected&&SameStopToken(recorder.received,tokenB)&&!trackingButton.trackingGesture);
+    measurements[@"inlineBlockedThroughAfterDelayedUp"]=@(afterDelayedUp);
+    measurements[@"inlineRequiredAfterDelayedUp"]=@(102+NSEvent.doubleClickInterval);
+    trackingButton.stopGestureGate=nil;
     coordinator.stopAvailable=YES; trackingButton.sessionToken=[coordinator currentStopToken]; trackingButton.target=coordinator; trackingButton.action=@selector(stopSharingClicked:);
     trackingCell.duringTracking=^{
         coordinator.windowElement=windowB; coordinator.windowGeneration++; coordinator.stopAvailable=YES;
@@ -3345,15 +3982,83 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSMutableDictionary *externalGeometry=[CRDReadConfig(nil) mutableCopy]; externalGeometry[@"placement"]=@"bottom"; externalGeometry[@"width"]=@515;
     CRDWriteConfig(externalGeometry,nil); CRDReload(); RunFor(.2);
     check(@"external_configuration_wins_over_pending_geometry",!geometryDirty&&[CRDReadConfig(nil)[@"placement"] isEqual:@"bottom"]&&[CRDReadConfig(nil)[@"width"] isEqual:@515]);
+    // A scratch-only competing writer holds the lock for 600 ms. The delayed unlock bounds
+    // the fixture even if a lock attempt blocks unexpectedly.
+    auto holdConfigLock=[&]() -> dispatch_semaphore_t {
+        int fd=open([CRDConfigPath() stringByAppendingPathExtension:@"lock"].fileSystemRepresentation,O_RDWR|O_CLOEXEC);
+        NSCAssert(fd>=0&&flock(fd,LOCK_EX)==0,@"Fixture lock must be held");
+        dispatch_semaphore_t released=dispatch_semaphore_create(0);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,600*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
+            flock(fd,LOCK_UN); close(fd); dispatch_semaphore_signal(released);
+        });
+        return released;
+    };
+    auto markUserGeometry=[&] {
+        BeginUserGeometry(overlay.controller.window);
+        [overlay.controller.window setFrameOrigin:NSMakePoint(NSMinX(visible)+80,NSMinY(visible)+90)];
+        SaveGeometry(overlay); EndUserGeometry();
+    };
+    resetGeometry(@"center"); RunFor(.2); markUserGeometry();
+    dispatch_semaphore_t saveLock=holdConfigLock();
+    NSTimeInterval saveStart=NSProcessInfo.processInfo.systemUptime; PersistGeometry(overlay);
+    NSTimeInterval saveDelay=NSProcessInfo.processInfo.systemUptime-saveStart;
+    NSRect capturedFrame=geometryFrame;
+    [overlay.controller.window setContentSize:NSMakeSize(NSWidth(capturedFrame)+30,NSHeight(capturedFrame)+20)];
+    RunFor(.3); // Let the original debounce and contended retries run before the lock releases.
+    BOOL retainedWhileBusy=geometryDirty&&[CRDReadConfig(nil)[@"placement"] isEqual:@"center"];
+    check(@"busy_user_save_survives_system_resize_without_saving_the_system_frame",retainedWhileBusy&&NSEqualRects(overlay.controller.window.frame,capturedFrame));
+    dispatch_semaphore_wait(saveLock,DISPATCH_TIME_FOREVER); RunFor(.25);
+    check(@"busy_geometry_save_returns_without_waiting_and_retries_captured_frame",saveDelay<.2&&retainedWhileBusy&&!geometryDirty&&
+        [CRDReadConfig(nil)[@"placement"] isEqual:@"custom"]&&[CRDReadConfig(nil)[@"x"] isEqual:@80]);
+    measurements[@"busyGeometrySaveSeconds"]=@(saveDelay);
+    NSString *afterRetrySignature=FileSignature(); NSUInteger afterRetryReads=configReadCount; RunFor(.35);
+    check(@"geometry_retry_stops_when_saved",[FileSignature() isEqual:afterRetrySignature]&&configReadCount==afterRetryReads);
+    resetGeometry(@"center"); RunFor(.2); markUserGeometry();
+    coordinator.original=(id)fakeApp; coordinator.originalBirth=fixtureBirth;
+    coordinator.applicationElement=@"fixture-application"; coordinator.trusted=YES;
+    SetOriginalHidden(coordinator,YES);
+    AXError (^savedAXWrite)(id,BOOL)=fixtureAXWrite;
+    __block BOOL restoredWithLockHeld=NO,restoredBeforePersistence=NO;
+    __block NSTimeInterval restoreAt=0;
+    fixtureAXWrite=^AXError(id element,BOOL value){
+        if(!value) {
+            restoreAt=NSProcessInfo.processInfo.systemUptime;
+            restoredBeforePersistence=geometryDirty&&[CRDReadConfig(nil)[@"placement"] isEqual:@"center"];
+            int probe=open([CRDConfigPath() stringByAppendingPathExtension:@"lock"].fileSystemRepresentation,O_RDWR|O_CLOEXEC);
+            restoredWithLockHeld=probe>=0&&flock(probe,LOCK_EX|LOCK_NB)!=0&&errno==EWOULDBLOCK;
+            if(probe>=0) close(probe);
+        }
+        return savedAXWrite(element,value);
+    };
+    dispatch_semaphore_t exitLock=holdConfigLock(); NSString *beforeExit=FileSignature();
+    NSTimeInterval exitStart=NSProcessInfo.processInfo.systemUptime; [coordinator cleanExit];
+    NSTimeInterval exitDelay=NSProcessInfo.processInfo.systemUptime-exitStart;
+    BOOL stoppedBeforeUnlock=exitDelay<.2&&!hidden&&!coordinator.ownsHidden&&restoredWithLockHeld;
+    dispatch_semaphore_wait(exitLock,DISPATCH_TIME_FOREVER); RunFor(.25);
+    check(@"shutdown_restores_before_optional_persistence_even_with_config_lock_held",restoredBeforePersistence&&restoredWithLockHeld&&restoreAt-exitStart<.2);
+    check(@"shutdown_lock_attempt_is_bounded_and_leaves_no_geometry_retry",stoppedBeforeUnlock&&!geometryDirty&&[FileSignature() isEqual:beforeExit]);
+    measurements[@"shutdownRestoreSeconds"]=@(restoreAt-exitStart); measurements[@"shutdownWithBusyLockSeconds"]=@(exitDelay);
+    fixtureAXWrite=savedAXWrite;
     previewMode=YES; overlay.shown=NO; coordinator.stopping=NO;
     fixtureAXRead=nil; fixtureAXWrite=nil; fixtureAXPress=nil; fixtureObserverSetup=nil; fixtureApplication=nil; fixtureBirth=nil;
-    BOOL fits=YES; NSRect bounds=NSMakeRect(0,0,1000,800);
-    for(NSValue *edge in @[[NSValue valueWithPoint:NSMakePoint(497.5,795)],[NSValue valueWithPoint:NSMakePoint(497.5,0)],[NSValue valueWithPoint:NSMakePoint(0,400)],[NSValue valueWithPoint:NSMakePoint(995,400)]]) {
-        SymmetricCapsuleFrame(NSMakeRect(edge.pointValue.x,edge.pointValue.y,5,5),bounds,NSMakeSize(120,36),&fits);
-        check(@"capsule_requires_entire_rectangle_inside_visible_frame",!fits);
+    // Near every edge and corner, and for a window partly off screen, the capsule moves inside the
+    // visible frame at whole points with its size unchanged. In the middle it stays centered. A
+    // smaller screen reduces the temporary layout, keeping the Stop target where space permits.
+    BOOL fits=YES,edgesInside=YES; NSRect bounds=NSMakeRect(0,0,1000,800); NSSize capsuleSize=CapsuleLayout(NSMakeSize(88,30),12).size;
+    for(NSValue *edge in @[[NSValue valueWithPoint:NSMakePoint(497.5,795)],[NSValue valueWithPoint:NSMakePoint(497.5,0)],[NSValue valueWithPoint:NSMakePoint(0,400)],[NSValue valueWithPoint:NSMakePoint(995,400)],
+        [NSValue valueWithPoint:NSMakePoint(0,0)],[NSValue valueWithPoint:NSMakePoint(995,795)],[NSValue valueWithPoint:NSMakePoint(0,795)],[NSValue valueWithPoint:NSMakePoint(995,0)],[NSValue valueWithPoint:NSMakePoint(-20,810)]]) {
+        NSRect frame=CapsuleFrame(NSMakeRect(edge.pointValue.x,edge.pointValue.y,5,5),bounds,capsuleSize,&fits);
+        edgesInside=edgesInside&&fits&&NSContainsRect(bounds,frame)&&NSEqualSizes(frame.size,capsuleSize)&&frame.origin.x==round(frame.origin.x)&&frame.origin.y==round(frame.origin.y);
     }
-    SymmetricCapsuleFrame(NSMakeRect(497.5,397.5,5,5),bounds,NSMakeSize(120,36),&fits);
-    check(@"center_capsule_fits",fits);
+    check(@"capsule_near_any_edge_moves_inside_the_visible_frame",edgesInside);
+    NSRect centered=CapsuleFrame(NSMakeRect(497.5,397.5,5,5),bounds,capsuleSize,&fits);
+    check(@"center_capsule_fits",fits&&fabs(NSMidX(centered)-500)<=.51&&fabs(NSMidY(centered)-400)<=.51);
+    CRDCapsuleLayout fitted=CapsuleLayoutOnScreen(NSMakeSize(280,30),128,NSMakeSize(320,200));
+    NSRect fittedFrame=CapsuleFrame(NSMakeRect(-8,180,17,17),NSMakeRect(0,0,320,200),fitted.size,&fits);
+    check(@"large_capsule_fits_small_screen_and_keeps_stop_target",fits&&NSContainsRect(NSMakeRect(0,0,320,200),fittedFrame)&&fitted.press.size.width>=120&&fitted.press.size.height>=36);
+    CRDCapsuleLayout tiny=CapsuleLayoutOnScreen(NSMakeSize(88,30),17,NSMakeSize(100,30));
+    check(@"small_screen_capsule_keeps_a_fold_dot_outside_stop_margin",NSWidth(tiny.dot)>0&&NSHeight(tiny.dot)>0&&
+        NSMinX(tiny.dot)<NSMinX(tiny.press)-CRDStopShrinkMargin&&tiny.size.width<=100&&tiny.size.height<=30);
     BOOL invisible=coordinator.statusItem==nil;
     for(NSWindow *window in NSApp.windows) invisible=invisible&&!window.visible;
     check(@"self_test_never_orders_any_fixture_window_or_status_item",invisible);
@@ -3365,24 +4070,35 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
             @"showText":@NO,@"showStopButton":@NO,@"stopRevealSeconds":@0,@"placement":@"center"}];
         [[NSJSONSerialization dataWithJSONObject:@{@"schema":@1,@"presets":@[@{@"id":@"small-dot",@"name":@"Small dot",@"values":@{@"layout":@"dot",@"width":@42,@"height":@42,@"dotDiameter":@12,@"stopRevealSeconds":@0}},
             @{@"id":@"bar",@"name":@"Bar",@"values":@{@"layout":@"row",@"width":@440,@"height":@48}}]} options:0 error:nil] writeToFile:PresetsPath() atomically:YES];
-        for(NSString *look in @[@"light",@"dark"]) {
-            smallDot[@"appearance"]=look; apply(smallDot); fixtureReduceMotion=@YES;
-            WriteViewSnapshot(overlay.customView,snapshotDirectory,[NSString stringWithFormat:@"helper_dot_collapsed_%@",look]);
-            [coordinator presentStopRevealWithToken:tokenA]; RunFor(.05);
-            coordinator.revealStopButton.enabled=YES; StyleStopTitle(coordinator.revealStopButton,coordinator.revealStopButton.title,NSFont.systemFontSize);
-            WriteViewSnapshot(coordinator.stopRevealPanel.contentView,snapshotDirectory,[NSString stringWithFormat:@"helper_dot_expanded_%@",look]);
-            coordinator.revealStopButton.enabled=NO; [coordinator closeStopReveal:@"snapshot"]; fixtureReduceMotion=nil;
-            // The built-in shapes as the helper draws them, to compare Stop, the grip and the card.
+        // Every built-in shape with its Stop, the Stop pill's states, and the capsule a double-click
+        // opens on each shape, in both Stop styles, both languages and both looks. Stop is enabled
+        // only for the drawing.
+        for(NSString *style in ChoiceIDs(@"stopStyle")) for(NSString *language in @[@"ko",@"en"]) for(NSString *look in @[@"light",@"dark"]) {
+            fixtureLanguage=language; fixtureReduceMotion=@YES;
+            NSString *tag=[NSString stringWithFormat:@"%@_%@_%@",style,look,language];
+            smallDot[@"appearance"]=look; smallDot[@"stopStyle"]=style; apply(smallDot);
+            WriteViewSnapshot(overlay.customView,snapshotDirectory,[@"helper_dot_collapsed_" stringByAppendingString:tag]);
             for(NSDictionary *shape in Schema()[@"shapes"]) {
-                if([shape[@"id"] isEqual:@"custom"]||[shape[@"values"][@"layout"] isEqual:@"dot"]) continue;
-                NSMutableDictionary *look_=[CRDDefaults() mutableCopy]; [look_ addEntriesFromDictionary:shape[@"values"]];
-                look_[@"mode"]=@"custom"; look_[@"shape"]=shape[@"id"]; look_[@"appearance"]=look; apply(look_);
-                overlay.stop.enabled=YES; StyleStopTitle(overlay.stop,overlay.stop.title,overlay.stop.font.pointSize);
-                WriteViewSnapshot(overlay.customView,snapshotDirectory,[NSString stringWithFormat:@"helper_shape_%@_%@",shape[@"id"],look]);
+                NSMutableDictionary *values=[smallDot mutableCopy];
+                if(![shape[@"id"] isEqual:@"custom"]) { values=[CRDDefaults() mutableCopy]; [values addEntriesFromDictionary:shape[@"values"]]; values[@"shape"]=shape[@"id"]; }
+                values[@"mode"]=@"custom"; values[@"appearance"]=look; values[@"stopStyle"]=style; values[@"placement"]=@"center"; values[@"stopRevealSeconds"]=@0; apply(values);
+                overlay.stop.enabled=YES;
+                WriteViewSnapshot(overlay.customView,snapshotDirectory,[NSString stringWithFormat:@"helper_shape_%@_%@",shape[@"id"],tag]);
+                if([shape[@"id"] isEqual:@"bar"]) {
+                    WriteViewSnapshot(overlay.stop,snapshotDirectory,[@"helper_stop_enabled_" stringByAppendingString:tag]);
+                    overlay.stop.cell.highlighted=YES; WriteViewSnapshot(overlay.stop,snapshotDirectory,[@"helper_stop_pressed_" stringByAppendingString:tag]); overlay.stop.cell.highlighted=NO;
+                    overlay.stop.enabled=NO; WriteViewSnapshot(overlay.stop,snapshotDirectory,[@"helper_stop_disabled_" stringByAppendingString:tag]);
+                }
                 overlay.stop.enabled=NO;
+                [coordinator presentStopRevealWithToken:tokenA]; RunFor(.05);
+                coordinator.revealStopButton.enabled=YES;
+                WriteViewSnapshot(coordinator.stopRevealPanel.contentView,snapshotDirectory,[NSString stringWithFormat:@"helper_capsule_%@_%@",shape[@"id"],tag]);
+                coordinator.revealStopButton.enabled=NO; [coordinator closeStopReveal:@"snapshot"];
             }
+            fixtureReduceMotion=nil;
         }
-        smallDot[@"draggable"]=@NO; apply(smallDot);
+        fixtureLanguage=nil;
+        smallDot[@"draggable"]=@NO; smallDot[@"stopStyle"]=@"red"; apply(smallDot);
         for(NSString *language in @[@"ko",@"en"]) {
             fixtureLanguage=language; NSMutableString *text=[NSMutableString string];
             [text appendString:@"# Right-click menu of the custom window (position locked, preset Small dot applied)\n"]; AppendMenuText([coordinator windowContextMenu],text,@"");
@@ -3396,7 +4112,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     fixtureNextTrackingEvent=nil;
     [overlay.controller.window orderOut:nil]; StopWatchers(); [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
     BOOL passed=YES; for(NSDictionary *item in checks) if(![item[@"passed"] boolValue]) passed=NO;
-    NSDictionary *report=@{@"passed":@(passed),@"checks":checks,@"boundary":@"Standalone renderer only. No Google library load, original host access, AX writes, or service changes.",@"schemaSHA256":@(kCRDSettingsSchemaSHA256),@"localizationSHA256":@(kCRDLocalizationSHA256),@"language":LocalizationLanguage()};
+    NSDictionary *report=@{@"passed":@(passed),@"checks":checks,@"measurements":measurements,@"boundary":@"Standalone renderer only. No Google library load, original host access, AX writes, or service changes.",@"schemaSHA256":@(kCRDSettingsSchemaSHA256),@"localizationSHA256":@(kCRDLocalizationSHA256),@"language":LocalizationLanguage()};
     puts([[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] encoding:NSUTF8StringEncoding].UTF8String);
     return passed?0:1;
 }
