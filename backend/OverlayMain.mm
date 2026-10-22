@@ -2973,12 +2973,22 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     check(@"context_reentry_cancels_capsule",replacementMenu.numberOfItems==8&&coordinator.stopRevealPanel==nil&&coordinator.revealTimer==nil&&!overlay.customView.suppressBackground);
     NSMutableDictionary *small=[reveal mutableCopy]; small[@"width"]=@7; small[@"height"]=@5; small[@"dotDiameter"]=@10;
     apply(small); NSRect exactOriginal=overlay.controller.window.frame; NSDictionary *exactSettings=[currentConfig copy];
+    fixtureReduceMotion=@NO; // These checks follow the animated collapse, whatever the machine's Reduce Motion setting.
     [coordinator presentStopRevealWithToken:tokenA]; NSPanel *smallPanel=coordinator.stopRevealPanel; CRDStatusDot *smallMovingDot=coordinator.revealDot;
     waitForOpen();
     check(@"moving_dot_retains_clamped_original_diameter",smallMovingDot.dotDiameter==5&&smallMovingDot.geometricDotRect.size.width==5&&smallMovingDot.alphaValue==1);
     waitForClose();
     check(@"timeout_restores_exact_tiny_frame_and_settings",coordinator.stopRevealPanel==nil&&NSEqualRects(smallPanel.frame,exactOriginal)&&NSEqualRects(overlay.controller.window.frame,exactOriginal)&&[currentConfig isEqual:exactSettings]&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);
     check(@"moving_dot_returns_to_original_center_before_restore",fabs(NSMidX(smallMovingDot.frame)-exactOriginal.size.width/2)<.1&&fabs(NSMidY(smallMovingDot.frame)-exactOriginal.size.height/2)<.1);
+    fixtureReduceMotion=nil;
+    // With Reduce Motion the capsule closes at once, without the collapse, and the tiny dot window
+    // comes back with its exact frame, settings, opacity and clicks.
+    fixtureReduceMotion=@YES;
+    [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+    BOOL reducedOpened=coordinator.stopRevealPanel!=nil&&coordinator.revealTimer!=nil&&overlay.customView.suppressBackground;
+    waitForClose();
+    check(@"reduced_motion_timeout_restores_exact_tiny_frame_and_settings",reducedOpened&&coordinator.stopRevealPanel==nil&&NSEqualRects(overlay.controller.window.frame,exactOriginal)&&[currentConfig isEqual:exactSettings]&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);
+    fixtureReduceMotion=nil;
     apply(reveal);
     [coordinator presentStopRevealWithToken:tokenA]; ReconcileFromConfig(); RunFor(.3);
     check(@"configuration_changes_cancel_stale_capsule_and_restore_hit_testing",coordinator.stopRevealPanel==nil&&!overlay.customView.suppressBackground&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);

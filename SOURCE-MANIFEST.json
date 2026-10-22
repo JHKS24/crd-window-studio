@@ -311,9 +311,9 @@
       "sha256": "98180afa257ec48ad74c24834a77298119701e36111b6846416bc4ffbf40b859"
     },
     "backend/OverlayMain.mm": {
-      "bytes": 266970,
+      "bytes": 267862,
       "executable": false,
-      "sha256": "517bdcdaf4f80bd53619db9b8871c5553691abed9c25f4f5958a704e322e336c"
+      "sha256": "3e325a59f687d91aa2a70ff259b4ee3c69a97fb01194fbb7d4b1b25861d6f4fd"
     },
     "config/custom.json": {
       "bytes": 679,
