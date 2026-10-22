@@ -43,7 +43,7 @@ final class LayoutAndStyleTests: XCTestCase {
     }
 
     /// The display map's window mark is never smaller than 6 x 6 pt and stays on the screen drawing.
-    func testScreenMapMarkHasAMinimumSize() {
+    @MainActor func testScreenMapMarkHasAMinimumSize() {
         let screen = CGRect(x: 0, y: 0, width: 120, height: 68)
         let dot = ScreenMap.mark(CGRect(x: 100, y: 3, width: 2.6, height: 2.6), in: screen)
         XCTAssertEqual(dot.size, CGSize(width: 6, height: 6))
@@ -74,7 +74,7 @@ final class LayoutAndStyleTests: XCTestCase {
     }
 
     /// One size and radius for every filled button; dark inactive and disabled fills differ clearly.
-    func testFilledButtonsShareOneSizeAndDistinctStates() {
+    @MainActor func testFilledButtonsShareOneSizeAndDistinctStates() {
         XCTAssertEqual(ProminentButtonStyle.cornerRadius, 6)
         XCTAssertEqual(ProminentButtonStyle.minimumHeight, 22)
         XCTAssertEqual(ProminentButtonStyle.neutralFill(enabled: true, dark: false), 0.12, "The light inactive fill is 12%")

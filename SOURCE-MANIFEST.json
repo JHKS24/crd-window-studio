@@ -156,9 +156,9 @@
       "sha256": "944ba757f3eb1de003652f84511455ceec2faeb2fd9241425c791c08e9a98cbc"
     },
     "Sources/CRDWindowStudio/Stores/SettingsStore.swift": {
-      "bytes": 10962,
+      "bytes": 10986,
       "executable": false,
-      "sha256": "843afd0cf34c72f2e28abb50a482c921a6e51ab46ee7c9fd10ff3b1ee8bd5651"
+      "sha256": "b2b02b2c9f94dc6ed854938619f74716a122e36a445a7e099a5fa8d11fab27b4"
     },
     "Sources/CRDWindowStudio/Stores/ShrinkSetting.swift": {
       "bytes": 1242,
@@ -236,9 +236,9 @@
       "sha256": "36ab9cd99b18439dab3410f2e353730694b856681dbf60e9d87cc65d5d2827b7"
     },
     "Sources/CRDWindowStudio/Views/Shared/SettingsSections.swift": {
-      "bytes": 31027,
+      "bytes": 31038,
       "executable": false,
-      "sha256": "098242f3d305c8314be732d6e70cdb174ce8fc50a1caf11380e7d17b6614ec56"
+      "sha256": "c0c0ad0b8a8cfc01eabf789d25829ed9dd6b39bc249bfefcdaea90a05f6fee3e"
     },
     "Sources/CRDWindowStudio/Views/Shared/StudioStatus.swift": {
       "bytes": 19926,
@@ -281,9 +281,9 @@
       "sha256": "9e57e08957fd758c7918f04914ab908b55fd895211e89de82fb10ab324a36db4"
     },
     "Tests/CRDWindowStudioTests/LayoutAndStyleTests.swift": {
-      "bytes": 5507,
+      "bytes": 5529,
       "executable": false,
-      "sha256": "fd8fdda8055e760c2300a3482b949c966e0970a85cacc5d6b7a281edf855f993"
+      "sha256": "e93e0d2211474d2308d6bd0fbef9807a0f17107ef8c015d764dae049181dc650"
     },
     "Tests/CRDWindowStudioTests/StatusAndLifecycleTests.swift": {
       "bytes": 16558,
@@ -311,9 +311,9 @@
       "sha256": "98180afa257ec48ad74c24834a77298119701e36111b6846416bc4ffbf40b859"
     },
     "backend/OverlayMain.mm": {
-      "bytes": 265790,
+      "bytes": 266970,
       "executable": false,
-      "sha256": "b27bbfed3d91d676dc88138bab04ac7919754c1317ccdf900d72609c1ddc51b3"
+      "sha256": "517bdcdaf4f80bd53619db9b8871c5553691abed9c25f4f5958a704e322e336c"
     },
     "config/custom.json": {
       "bytes": 679,

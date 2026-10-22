@@ -277,6 +277,7 @@ struct DotAppearanceSettingsRows: View {
 /// A number field with a stepper for one dot metric. Typed text is staged as a draft so quitting
 /// commits it; leaving the field applies it, and an out-of-range value shows the allowed range.
 /// `commit` applies a value and returns the value actually stored.
+@MainActor
 private struct DotMetricRow: View {
     let title: String
     let value: Double

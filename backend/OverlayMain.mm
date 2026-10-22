@@ -2367,6 +2367,16 @@ static void RunFor(NSTimeInterval seconds) {
     NSDate *until=[NSDate dateWithTimeIntervalSinceNow:seconds];
     while(until.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runMode:NSDefaultRunLoopMode beforeDate:until];
 }
+// Runs the main run loop in short steps until `condition` holds or `limit` seconds pass, for checks
+// that wait for an animation or a timer; a slow machine only takes longer. Returns the condition.
+static BOOL RunUntil(NSTimeInterval limit,BOOL (^condition)(void)) {
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:limit];
+    while(!condition()) {
+        if(deadline.timeIntervalSinceNow<=0) return NO;
+        [NSRunLoop.mainRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:.02]];
+    }
+    return YES;
+}
 // Cancels the config file and folder watchers.
 static void StopWatchers(void) {
     if(fileWatcher) { dispatch_source_cancel(fileWatcher); fileWatcher=nil; }
@@ -2812,6 +2822,14 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSDictionary *tokenB=@{@"pid":@100,@"generation":@2,@"window":@"fixture-window-b",@"stop":@"fixture-stop-b"};
     check(@"stop_token_rejects_recreated_window_and_pid",SameStopToken(tokenA,[tokenA copy])&&!SameStopToken(tokenA,tokenB)&&!SameStopToken(tokenA,@{@"pid":@101,@"generation":@1,@"window":@"fixture-window-a",@"stop":@"fixture-stop-a"})&&!SameStopToken(tokenA,nil));
     NSMutableDictionary *reveal=[CRDDefaults() mutableCopy]; reveal[@"mode"]=@"custom"; reveal[@"layout"]=@"dot"; reveal[@"width"]=@40; reveal[@"height"]=@40; reveal[@"stopRevealSeconds"]=@1; apply(reveal);
+    // Waits for the capsule's opening to finish: its fold timer starts then (stopRevealSeconds above 0),
+    // or it did not open. With no fold timer there is no such signal, so it waits a fixed .3 s.
+    auto waitForOpen=[&]{
+        if([currentConfig[@"stopRevealSeconds"] doubleValue]>0) RunUntil(5,^BOOL{ return !coordinator.stopRevealPanel||coordinator.revealTimer!=nil; });
+        else RunFor(.3);
+    };
+    // Waits for the capsule to close, its closing animation included.
+    auto waitForClose=[&]{ RunUntil(5,^BOOL{ return !coordinator.stopRevealPanel; }); };
     __block NSUInteger revealRequests=0; overlay.dot.doubleClickAction=^(NSEvent *event){ revealRequests++; };
     NSRect revealAnchor=overlay.controller.window.frame;
     press(overlay.dot,NSMakePoint(NSMidX(revealAnchor),NSMidY(revealAnchor)),@[],1);
@@ -2843,7 +2861,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     for(NSNumber *reduced in @[@NO,@YES]) {
         fixtureReduceMotion=reduced;
         NSRect anchorBefore=overlay.controller.window.frame;
-        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; RunFor(.3);
+        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; waitForOpen();
         NSPanel *capsule=coordinator.stopRevealPanel; CRDBackground *capsuleBackground=(CRDBackground *)capsule.contentView;
         CRDSessionStopButton *capsuleStop=coordinator.revealStopButton; CRDStopGestureGate *capsuleGate=capsuleStop.stopGestureGate;
         NSRect stopZone=NSInsetRect(capsuleStop.frame,-CRDStopShrinkMargin,-CRDStopShrinkMargin);
@@ -2863,18 +2881,18 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         check(@"capsule_presses_outside_stop_pass_and_presses_on_stop_are_gated",outsidePasses&&stopGated&&NSContainsRect(stopZone,capsuleStop.frame));
         press(capsuleBackground,outside,@[],1); BOOL singleIgnored=coordinator.stopRevealPanel==capsule;
         press(capsuleBackground,NSMakePoint(NSMinX(capsuleStop.frame)-CRDStopShrinkMargin/2,NSMidY(capsuleStop.frame)),@[],2); BOOL marginIgnored=coordinator.stopRevealPanel==capsule;
-        press(capsuleBackground,outside,@[],2); RunFor(.3);
+        press(capsuleBackground,outside,@[],2); waitForClose();
         check(@"capsule_double_click_outside_stop_shrinks_at_same_anchor",singleIgnored&&marginIgnored&&coordinator.stopRevealPanel==nil&&NSEqualRects(overlay.controller.window.frame,anchorBefore)&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents&&!overlay.customView.suppressBackground);
-        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; RunFor(.3);
+        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; waitForOpen();
         CRDStatusDot *capsuleDot=coordinator.revealDot;
-        press(capsuleDot,NSMakePoint(NSMidX(capsuleDot.frame),NSMidY(capsuleDot.frame)),@[],2); RunFor(.3);
+        press(capsuleDot,NSMakePoint(NSMidX(capsuleDot.frame),NSMidY(capsuleDot.frame)),@[],2); waitForClose();
         check(@"capsule_status_dot_double_click_shrinks",coordinator.stopRevealPanel==nil&&NSEqualRects(overlay.controller.window.frame,anchorBefore));
     }
     // A fresh outside click through the capsule's own loop (its mouse-up consumed there),
     // then a quick click on Stop that macOS reports as count 1, is refused in both motion modes.
     for(NSNumber *reduced in @[@NO,@YES]) {
         fixtureReduceMotion=reduced;
-        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; RunFor(.3);
+        [coordinator presentStopRevealWithToken:tokenA afterEvent:doubleUp]; waitForOpen();
         NSPanel *capsule=coordinator.stopRevealPanel; CRDBackground *capsuleBackground=(CRDBackground *)capsule.contentView;
         CRDSessionStopButton *capsuleStop=coordinator.revealStopButton; CRDStopGestureGate *capsuleGate=capsuleStop.stopGestureGate;
         NSPoint outside=NSMakePoint(2,NSMidY(capsuleBackground.bounds));
@@ -2902,14 +2920,14 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSMenu *context=[overlay.dot menuForEvent:fixtureClick];
     check(@"dot_context_menu_is_window_menu_with_safe_stop_action",context.numberOfItems==8&&[context itemAtIndex:7].action==@selector(stopSharingClicked:)&&![context itemAtIndex:7].enabled&&[context itemAtIndex:1].action==@selector(togglePositionLock:));
     fixtureLanguage=@"en";
-    [coordinator presentStopRevealWithToken:tokenA]; RunFor(.3);
+    [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
     NSButton *englishReveal=(NSButton *)coordinator.stopRevealPanel.contentView.subviews.firstObject;
     NSSize englishTitle=[englishReveal.title sizeWithAttributes:@{NSFontAttributeName:englishReveal.font}];
     NSRect englishTitleRect=[englishReveal.cell titleRectForBounds:englishReveal.bounds];
     check(@"english_reveal_title_fits_standard_native_control",[englishReveal.title isEqual:translatedStop]&&englishTitleRect.size.width>=ceil(englishTitle.width)&&englishTitleRect.size.height>=ceil(englishTitle.height));
     [coordinator closeStopReveal:@"english-fixture-complete"]; fixtureLanguage=nil;
     NSRect mainBefore=overlay.controller.window.frame; NSDictionary *settingsBefore=[currentConfig copy];
-    [coordinator presentStopRevealWithToken:tokenA]; RunFor(.3);
+    [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
     check(@"stop_reveal_does_not_change_main_geometry_or_config",coordinator.stopRevealPanel!=nil&&!coordinator.stopRevealPanel.visible&&NSEqualRects(mainBefore,overlay.controller.window.frame)&&[settingsBefore isEqual:currentConfig]);
     NSButton *revealed=(NSButton *)coordinator.stopRevealPanel.contentView.subviews.firstObject;
     NSSize titleSize=[revealed.title sizeWithAttributes:@{NSFontAttributeName:revealed.font}];
@@ -2943,11 +2961,11 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     [coordinator presentStopRevealWithToken:tokenA]; RunFor(.3);
     [coordinator validateStopRevealForToken:tokenA modeSignature:@"different-mode" windowDetected:YES];
     check(@"stop_reveal_closes_on_mode_change",coordinator.stopRevealPanel==nil);
-    [coordinator presentStopRevealWithToken:tokenA]; RunFor(1.6);
+    [coordinator presentStopRevealWithToken:tokenA]; waitForOpen(); waitForClose();
     check(@"stop_reveal_one_shot_timeout",coordinator.stopRevealPanel==nil&&coordinator.revealTimer==nil&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);
     [coordinator presentStopRevealWithToken:tokenA];
     NSPanel *stalePanel=coordinator.stopRevealPanel;
-    [coordinator presentStopRevealWithToken:tokenB]; RunFor(.3);
+    [coordinator presentStopRevealWithToken:tokenB]; waitForOpen();
     check(@"capsule_reentry_cancels_stale_animation_and_timeout",coordinator.stopRevealPanel!=stalePanel&&[coordinator.revealToken isEqual:tokenB]&&coordinator.revealTimer!=nil&&overlay.customView.suppressBackground);
     if(overlay.dot.dragWillBegin) overlay.dot.dragWillBegin();
     check(@"dot_drag_closes_capsule_before_moving",coordinator.stopRevealPanel==nil&&!overlay.customView.suppressBackground);
@@ -2956,9 +2974,9 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSMutableDictionary *small=[reveal mutableCopy]; small[@"width"]=@7; small[@"height"]=@5; small[@"dotDiameter"]=@10;
     apply(small); NSRect exactOriginal=overlay.controller.window.frame; NSDictionary *exactSettings=[currentConfig copy];
     [coordinator presentStopRevealWithToken:tokenA]; NSPanel *smallPanel=coordinator.stopRevealPanel; CRDStatusDot *smallMovingDot=coordinator.revealDot;
-    RunFor(.3);
+    waitForOpen();
     check(@"moving_dot_retains_clamped_original_diameter",smallMovingDot.dotDiameter==5&&smallMovingDot.geometricDotRect.size.width==5&&smallMovingDot.alphaValue==1);
-    RunFor(1.3);
+    waitForClose();
     check(@"timeout_restores_exact_tiny_frame_and_settings",coordinator.stopRevealPanel==nil&&NSEqualRects(smallPanel.frame,exactOriginal)&&NSEqualRects(overlay.controller.window.frame,exactOriginal)&&[currentConfig isEqual:exactSettings]&&overlay.dot.alphaValue==1&&!overlay.controller.window.ignoresMouseEvents);
     check(@"moving_dot_returns_to_original_center_before_restore",fabs(NSMidX(smallMovingDot.frame)-exactOriginal.size.width/2)<.1&&fabs(NSMidY(smallMovingDot.frame)-exactOriginal.size.height/2)<.1);
     apply(reveal);

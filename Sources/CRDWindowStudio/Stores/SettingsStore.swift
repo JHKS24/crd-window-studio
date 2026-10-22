@@ -61,10 +61,10 @@ final class SettingsStore: ObservableObject {
             }
             rememberShrink(from: values)
             watcher = ConfigurationWatcher(file: repository.url) { [weak self] in
-                Task { @MainActor in self?.reload() }
+                Task { @MainActor [weak self] in self?.reload() }
             }
             screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.screens = NSScreen.screens }
+                Task { @MainActor [weak self] in self?.screens = NSScreen.screens }
             }
             terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.commitDraftsAndFlush() }
