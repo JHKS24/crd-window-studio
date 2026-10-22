@@ -1,0 +1,16 @@
+CRD Window Studio
+Copyright (c) 2026 CRD Window Studio contributors
+
+Original project code, documentation, and project artwork are distributed
+under the MIT License in LICENSE, to the extent of the contributors' rights.
+Third-party files retain their own notices and licenses. See
+THIRD_PARTY_NOTICES.md and reference/LICENSE in the full source distribution.
+
+This is an independent, unofficial utility. It is not affiliated with,
+endorsed by, or sponsored by Google LLC or Apple Inc. Chrome, Chrome Remote
+Desktop, Google, macOS, and Apple are names or trademarks of their respective
+owners. They are used only to identify compatible software and platforms.
+No rights to third-party trademarks are granted by this project.
+
+Google host binaries, account information, and authentication configuration
+are not included. Install Chrome Remote Desktop separately from Google.

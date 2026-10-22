@@ -1,0 +1,293 @@
+{
+  "defaults": {
+    "schema": 1,
+    "mode": "custom",
+    "appearance": "system",
+    "shape": "bar",
+    "layout": "row",
+    "placement": "center",
+    "edgeInset": 24,
+    "width": 440,
+    "height": 48,
+    "x": 24,
+    "y": 72,
+    "screen": 0,
+    "radius": 12,
+    "borderWidth": 0,
+    "fontSize": 0,
+    "opacity": 1,
+    "background": "system",
+    "foreground": "system",
+    "accent": "system",
+    "shadow": true,
+    "alwaysOnTop": true,
+    "draggable": true,
+    "resizable": true,
+    "constrainToScreen": true,
+    "showText": true,
+    "showStopButton": true,
+    "showDot": true,
+    "text": "",
+    "buttonText": "공유 중지",
+    "showHandle": true,
+    "handlePosition": "leading",
+    "handleSize": 14,
+    "handleOpacity": 0.65,
+    "enabled": true,
+    "loggingEnabled": true,
+    "stopRevealSeconds": 5,
+    "dotDiameter": 10,
+    "dotColor": "accent"
+  },
+  "numericLimits": {
+    "width": [
+      1,
+      16384
+    ],
+    "height": [
+      1,
+      16384
+    ],
+    "x": [
+      -65536,
+      65536
+    ],
+    "y": [
+      -65536,
+      65536
+    ],
+    "screen": [
+      0,
+      63
+    ],
+    "radius": [
+      0,
+      8192
+    ],
+    "borderWidth": [
+      0,
+      100
+    ],
+    "fontSize": [
+      0,
+      200
+    ],
+    "opacity": [
+      0,
+      1
+    ],
+    "edgeInset": [
+      0,
+      8192
+    ],
+    "handleSize": [
+      6,
+      40
+    ],
+    "handleOpacity": [
+      0.25,
+      1
+    ],
+    "stopRevealSeconds": [
+      0,
+      30
+    ],
+    "dotDiameter": [
+      2,
+      128
+    ]
+  },
+  "choices": {
+    "mode": [
+      {
+        "id": "custom",
+        "title": "꾸민 창"
+      },
+      {
+        "id": "original",
+        "title": "원래 공유 창"
+      }
+    ],
+    "appearance": [
+      {
+        "id": "light",
+        "title": "라이트"
+      },
+      {
+        "id": "dark",
+        "title": "다크"
+      },
+      {
+        "id": "system",
+        "title": "자동"
+      }
+    ],
+    "placement": [
+      {
+        "id": "center",
+        "title": "가운데"
+      },
+      {
+        "id": "top",
+        "title": "상단 가운데"
+      },
+      {
+        "id": "bottom",
+        "title": "하단 가운데"
+      },
+      {
+        "id": "custom",
+        "title": "직접 지정"
+      }
+    ],
+    "layout": [
+      {
+        "id": "row",
+        "title": "가로"
+      },
+      {
+        "id": "column",
+        "title": "세로"
+      },
+      {
+        "id": "dot",
+        "title": "상태 점"
+      }
+    ],
+    "accent": [
+      {
+        "id": "system",
+        "title": "시스템"
+      },
+      {
+        "id": "blue",
+        "title": "파란색"
+      },
+      {
+        "id": "purple",
+        "title": "보라색"
+      },
+      {
+        "id": "pink",
+        "title": "분홍색"
+      },
+      {
+        "id": "red",
+        "title": "빨간색"
+      },
+      {
+        "id": "orange",
+        "title": "주황색"
+      },
+      {
+        "id": "yellow",
+        "title": "노란색"
+      },
+      {
+        "id": "green",
+        "title": "초록색"
+      },
+      {
+        "id": "graphite",
+        "title": "흑색"
+      }
+    ],
+    "handlePosition": [
+      {
+        "id": "leading",
+        "title": "왼쪽"
+      },
+      {
+        "id": "trailing",
+        "title": "오른쪽"
+      },
+      {
+        "id": "top",
+        "title": "위쪽"
+      }
+    ]
+  },
+  "shapes": [
+    {
+      "id": "bar",
+      "title": "기본 바",
+      "symbol": "rectangle",
+      "values": {
+        "width": 440,
+        "height": 48,
+        "radius": 12,
+        "layout": "row",
+        "showText": true,
+        "showStopButton": true,
+        "showDot": true,
+        "handlePosition": "leading"
+      }
+    },
+    {
+      "id": "pill",
+      "title": "캡슐",
+      "symbol": "capsule",
+      "values": {
+        "width": 380,
+        "height": 48,
+        "radius": 24,
+        "layout": "row",
+        "showText": true,
+        "showStopButton": true,
+        "showDot": true,
+        "handlePosition": "leading"
+      }
+    },
+    {
+      "id": "compact",
+      "title": "콤팩트",
+      "symbol": "rectangle.compress.vertical",
+      "values": {
+        "width": 180,
+        "height": 40,
+        "radius": 10,
+        "layout": "row",
+        "showText": false,
+        "showStopButton": true,
+        "showDot": true,
+        "handlePosition": "leading"
+      }
+    },
+    {
+      "id": "card",
+      "title": "카드",
+      "symbol": "rectangle.portrait",
+      "values": {
+        "width": 300,
+        "height": 120,
+        "radius": 18,
+        "layout": "column",
+        "showText": true,
+        "showStopButton": true,
+        "showDot": true,
+        "handlePosition": "top"
+      }
+    },
+    {
+      "id": "dot",
+      "title": "상태 점",
+      "symbol": "circle.fill",
+      "values": {
+        "width": 40,
+        "height": 40,
+        "radius": 20,
+        "layout": "dot",
+        "showText": false,
+        "showStopButton": false,
+        "showDot": true,
+        "dotDiameter": 10
+      }
+    },
+    {
+      "id": "custom",
+      "title": "직접 지정",
+      "symbol": "slider.horizontal.3",
+      "values": {}
+    }
+  ]
+}
