@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-26, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sw_vers
+          uname -m
+          xcode-select -p
+          swift --version
+          python3 --version
+
+      - name: Build the app and the helper
+        run: ./scripts/build.sh --all --universal
+
+      - name: Check the signature and architectures
+        run: |
+          codesign --verify --strict "dist/CRD Window Studio.app"
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "dist/CRD Window Studio.app/Contents/Info.plist")
+          lipo -archs "dist/CRD Window Studio.app/Contents/MacOS/$exe"
+          lipo -archs build/OverlayAgent
+
+      - name: Helper self-test
+        run: ./build/OverlayAgent --crd-overlay-self-test
+
+      - name: Swift tests
+        run: swift test
+
+      - name: Python tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Render the settings window offscreen
+        run: |
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "dist/CRD Window Studio.app/Contents/Info.plist")
+          "dist/CRD Window Studio.app/Contents/MacOS/$exe" --render-snapshots "$RUNNER_TEMP/snapshots"
+          ls "$RUNNER_TEMP/snapshots" | head -40
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snapshots-${{ matrix.os }}
+          path: ${{ runner.temp }}/snapshots
+          if-no-files-found: ignore
+          retention-days: 7
