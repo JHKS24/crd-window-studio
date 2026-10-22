@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Chrome 원격 데스크톱으로 접속한 Mac에 뜨는 공유 알림 창을 원하는 모양과 자리로 바꿔 주는 macOS 앱">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CRD Window Studio">
+<meta property="og:description" content="A macOS app that changes the shape and position of the sharing notice Chrome Remote Desktop shows on the Mac you connect to.">
+<meta property="og:image" content="https://jhks24.github.io/crd-window-studio/video/poster-en.jpg">
+<link rel="icon" type="image/png" href="img/icon.png">
+</head>
+<body>
+<title>CRD Window Studio</title>
+<style>
+
+:root{--bg:#f5f5f7;--surface:#ffffff;--surface2:#eceef1;--text:#1d1d1f;--muted:#565a61;--line:#d7dae0;--accent:#0a6fd1;--accent-ink:#ffffff;--code:#1d1f23;--code-ink:#eef0f3;--shadow:0 18px 50px rgba(20,30,50,.14)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111214;--surface:#1b1c1f;--surface2:#25272b;--text:#f2f2f4;--muted:#a9adb4;--line:#33363b;--accent:#4aa3ff;--accent-ink:#06121f;--code:#0b0c0e;--code-ink:#e8eaed;--shadow:0 18px 50px rgba(0,0,0,.5)}}
+:root[data-theme="dark"]{--bg:#111214;--surface:#1b1c1f;--surface2:#25272b;--text:#f2f2f4;--muted:#a9adb4;--line:#33363b;--accent:#4aa3ff;--accent-ink:#06121f;--code:#0b0c0e;--code-ink:#e8eaed;--shadow:0 18px 50px rgba(0,0,0,.5)}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+.root{background:var(--bg);color:var(--text);min-height:100vh}
+.root:lang(ko){word-break:keep-all}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:3px;border-radius:8px}
+img{max-width:100%;display:block}
+.wrap{max-width:1120px;margin:0 auto;padding:0 16px}
+.hdr{display:flex;flex-wrap:wrap;align-items:center;gap:4px 22px;padding:8px 0}
+.brand{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;font-weight:600;min-height:44px}
+.nav{display:flex;flex-wrap:wrap;gap:0 18px;flex:1 1 auto;font-size:14px}
+.nav a{color:var(--muted);text-decoration:none;padding:12px 0}
+.nav a:hover{color:var(--text)}
+.tools{display:flex;align-items:center;gap:6px;font-size:14px}
+.tools a{color:var(--text);text-decoration:none;display:flex;align-items:center;gap:6px;padding:12px 8px}
+.lang{font:inherit;font-size:14px;min-height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--text);cursor:pointer}
+.hero{text-align:center;padding:clamp(40px,7vw,80px) 0 0}
+.hero h1{margin:18px auto 0;max-width:820px;font-size:clamp(32px,5.4vw,58px);line-height:1.12;letter-spacing:-.02em}
+.hero p.lead{margin:18px auto 0;max-width:700px;font-size:clamp(17px,2vw,19px);line-height:1.65;color:var(--muted)}
+.btns{margin-top:28px;display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+.btn{display:inline-flex;align-items:center;min-height:46px;padding:0 22px;border-radius:999px;font-weight:600;text-decoration:none}
+.btn.pri{background:var(--accent);color:var(--accent-ink)}
+.btn.sec{background:var(--surface);color:var(--text);border:1px solid var(--line)}
+.note{margin:14px 0 0;font-size:13px;color:var(--muted)}
+.desk{border-radius:14px;box-shadow:var(--shadow)}
+.herofig{margin:44px auto 0;max-width:1000px}
+.sec{padding:clamp(64px,9vw,112px) 0 0}
+.sec h2{margin:0;font-size:clamp(28px,3.6vw,40px);letter-spacing:-.015em;text-align:center}
+.intro{margin:14px auto 0;max-width:680px;text-align:center;color:var(--muted);font-size:17px;line-height:1.65}
+.story{max-width:720px;margin:24px auto 0}
+.story p{margin:0 0 14px;font-size:17px;line-height:1.75;color:var(--muted)}
+.ba{margin-top:32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:24px}
+.ba figure{margin:0}
+.ba .shot{border-radius:12px;border:1px solid var(--line)}
+.ba figcaption{margin-top:10px;font-size:14px;color:var(--muted);text-align:center}
+.fgrid{margin-top:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:20px}
+.fcard{background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden;display:flex;flex-direction:column}
+.fmedia{background:var(--surface2);min-height:210px;display:grid;place-items:center;padding:24px 18px}
+.fbody{padding:20px 22px 24px}
+.fbody h3,.tcard h3{margin:0;font-size:18px}
+.fbody p,.tcard p{margin:8px 0 0;color:var(--muted);line-height:1.6;font-size:15px}
+.tgrid{margin-top:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px}
+.tcard{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+.seg{display:inline-flex;gap:4px;padding:4px;border-radius:10px;background:var(--surface2);margin:24px auto 0}
+.seg button{min-height:40px;padding:0 18px;border:0;border-radius:8px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted)}
+.tour{margin-top:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:24px}
+.tour figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px}
+.tour img{border-radius:10px}
+.tour figcaption{padding:14px 4px 4px}
+.tour figcaption strong{display:block;font-size:17px}
+.tour figcaption span{display:block;margin-top:6px;color:var(--muted);font-size:15px;line-height:1.55}
+.steps{list-style:none;margin:32px auto 0;padding:0;max-width:760px;counter-reset:s}
+.steps li{counter-increment:s;position:relative;padding:0 0 26px 58px;font-size:17px;line-height:1.7}
+.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);font-weight:700}
+.steps li:not(:last-child)::after{content:"";position:absolute;left:18px;top:44px;bottom:6px;width:2px;background:var(--line)}
+.inst{max-width:820px;margin:24px auto 0}
+.inst p{font-size:17px;line-height:1.7;color:var(--muted)}
+pre{margin:18px 0;background:var(--code);color:var(--code-ink);border-radius:14px;padding:18px 20px;overflow-x:auto;font:14px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}
+.foot{margin-top:clamp(64px,9vw,112px);border-top:1px solid var(--line)}
+.foot .wrap{padding-top:28px;padding-bottom:40px;display:flex;flex-wrap:wrap;gap:14px 28px;justify-content:space-between;font-size:13px;color:var(--muted);line-height:1.6}
+.foot p{margin:0;max-width:640px}
+.foot nav{display:flex;flex-wrap:wrap;gap:4px 18px}
+.foot nav a{color:var(--text);padding:6px 0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+[hidden]{display:none!important}
+:root{--film-ground:#0d1116;
+--mk-wall:linear-gradient(160deg,#e3e9f0 0%,#c6d1dd 55%,#a6b5c6 100%);--mk-menubar:rgba(250,251,252,.74);--mk-menubar-ink:#1d1d1f;
+--mk-win:#ffffff;--mk-blue:#007aff;--mk-red:#D93036;--mk-ph:#c9ccd2;--mk-slot:rgba(29,40,58,.45);
+--mk-panel:#ffffff;--mk-panel-ink:#1d1d1f;--mk-panel-line:#e3e4e8;--mk-panel-muted:#6b7079;--mk-link:#0a6fd1;
+--mk-menu:#f6f6f8;--mk-menu-ink:#1d1d1f;--mk-menu-dim:#8a8d93;--mk-menu-sep:#dcdde1;
+--mk-crd-bg:#e8e8e8;--mk-crd-frame:#21b01c;--mk-crd-ink:#1d1d1f;--mk-crd-btn:#ffffff;--mk-crd-btn-line:#b9b9b9;--mk-crd-btn-ink:#1d1d1f}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;--mk-wall:linear-gradient(160deg,#3c4a5a 0%,#222a33 55%,#12161b 100%);--mk-menubar:rgba(28,30,34,.74);--mk-menubar-ink:#eef0f3;--mk-win:#1e1e1e;--mk-ph:#4a4c51;--mk-slot:rgba(255,255,255,.5);--mk-panel:#2a2b2f;--mk-panel-ink:#f2f2f4;--mk-panel-line:#3c3e43;--mk-panel-muted:#a2a6ad;--mk-link:#4aa3ff;--mk-menu:#2b2b2e;--mk-menu-ink:#f2f2f4;--mk-menu-dim:#8e9197;--mk-menu-sep:#47484d;--mk-crd-bg:#333333;--mk-crd-frame:#e8e8e8;--mk-crd-ink:#ececec;--mk-crd-btn:#5f5f62;--mk-crd-btn-line:#727275;--mk-crd-btn-ink:#f4f4f4}}
+:root[data-theme="dark"]{color-scheme:dark;--mk-wall:linear-gradient(160deg,#3c4a5a 0%,#222a33 55%,#12161b 100%);--mk-menubar:rgba(28,30,34,.74);--mk-menubar-ink:#eef0f3;--mk-win:#1e1e1e;--mk-ph:#4a4c51;--mk-slot:rgba(255,255,255,.5);--mk-panel:#2a2b2f;--mk-panel-ink:#f2f2f4;--mk-panel-line:#3c3e43;--mk-panel-muted:#a2a6ad;--mk-link:#4aa3ff;--mk-menu:#2b2b2e;--mk-menu-ink:#f2f2f4;--mk-menu-dim:#8e9197;--mk-menu-sep:#47484d;--mk-crd-bg:#333333;--mk-crd-frame:#e8e8e8;--mk-crd-ink:#ececec;--mk-crd-btn:#5f5f62;--mk-crd-btn-line:#727275;--mk-crd-btn-ink:#f4f4f4}
+.wrap{padding-left:max(16px,env(safe-area-inset-left,0px))!important;padding-right:max(16px,env(safe-area-inset-right,0px))!important}
+.root img{height:auto}
+.th-d{display:none!important}
+:root[data-theme="dark"] .th-d{display:block!important}
+:root[data-theme="dark"] .th-l{display:none!important}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .th-d{display:block!important}:root:not([data-theme="light"]) .th-l{display:none!important}}
+.tools{gap:10px}
+.langseg{display:inline-flex;gap:2px;padding:3px;border-radius:999px;border:1px solid var(--line);background:var(--surface)}
+.langseg button{min-width:42px;min-height:34px;padding:0 10px;border:0;border-radius:999px;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;letter-spacing:.03em;cursor:pointer}
+.langseg button[aria-pressed="true"]{background:var(--text);color:var(--bg)}
+.langseg button:focus-visible{border-radius:999px}
+.hicon{margin:0 auto;width:96px;height:96px}
+.btns{align-items:center}
+.btn{flex:none;box-sizing:border-box}
+.btn.ghost{background:var(--surface);color:var(--text);border:1px solid var(--line)}
+.herofig{margin:44px auto 0;max-width:1000px}
+.vslot{position:relative;aspect-ratio:16/9;border-radius:18px;background:var(--film-ground);box-shadow:var(--shadow)}
+.player{position:absolute;inset:0;overflow:hidden;border-radius:inherit;background:#000;color:#fff;-webkit-tap-highlight-color:transparent}
+.player video{display:block;width:100%;height:100%;object-fit:cover;background:#000;cursor:pointer}
+.player[data-idle],.player[data-idle] video{cursor:none}
+.vctl{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;padding:30px 10px 8px;background:linear-gradient(to top,rgba(0,0,0,.62),rgba(0,0,0,0));transition:opacity .25s ease}
+.player[data-idle] .vctl{opacity:0;pointer-events:none}
+.vb{flex:none;display:grid;place-items:center;width:38px;height:38px;padding:0;border:0;border-radius:50%;background:transparent;color:#fff;cursor:pointer}
+.vb:hover{background:rgba(255,255,255,.16)}
+.vb svg{display:none;width:20px;height:20px}
+.vb[data-icon="play"] .ic-play,.vb[data-icon="pause"] .ic-pause,.vb[data-icon="replay"] .ic-replay,.vb[data-icon="sound"] .ic-sound,.vb[data-icon="muted"] .ic-muted{display:block}
+.vtime{flex:none;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.45)}
+.vrange{-webkit-appearance:none;appearance:none;height:28px;margin:0;padding:0;background:transparent;cursor:pointer;--p:0%}
+.vseek{flex:1 1 auto;min-width:48px}
+.vvol{flex:none;width:76px}
+.player[data-novol] .vvol{display:none}
+.vrange::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(to right,#fff 0,#fff var(--p),rgba(255,255,255,.34) var(--p),rgba(255,255,255,.34) 100%)}
+.vrange::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:13px;height:13px;margin-top:-4.5px;border:0;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.45)}
+.vrange::-moz-range-track{height:4px;border:0;border-radius:2px;background:rgba(255,255,255,.34)}
+.vrange::-moz-range-progress{height:4px;border-radius:2px;background:#fff}
+.vrange::-moz-range-thumb{width:13px;height:13px;border:0;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.45)}
+.player .vrange:focus-visible{outline:2px solid #fff;outline-offset:2px;border-radius:4px}
+.player .vb:focus-visible,.player .bigplay:focus-visible,.player .vclose:focus-visible{outline:2px solid #fff;outline-offset:2px;border-radius:50%}
+.player .vhint:focus-visible{outline:2px solid #fff;outline-offset:2px;border-radius:999px}
+.bigplay{position:absolute;left:50%;top:50%;width:60px;height:60px;margin:-30px 0 0 -30px;display:grid;place-items:center;padding:0;border:0;border-radius:50%;background:rgba(14,17,22,.62);color:#fff;cursor:pointer;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.bigplay svg{display:block;width:26px;height:26px;margin-left:3px}
+@media (min-width:700px){.bigplay{top:76%;width:76px;height:76px;margin:-38px 0 0 -38px}.bigplay svg{width:30px;height:30px;margin-left:4px}}
+.vhint{position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:7px;max-width:calc(100% - 24px);min-height:34px;padding:0 13px;border:0;border-radius:999px;background:rgba(14,17,22,.68);color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.vhint svg{flex:none;width:16px;height:16px}
+.vhint span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.vclose{position:absolute;right:6px;top:6px;width:30px;height:30px;display:none;place-items:center;padding:0;border:0;border-radius:50%;background:rgba(14,17,22,.68);color:#fff;cursor:pointer;transition:opacity .25s ease}
+.vclose svg{width:14px;height:14px}
+.player.is-mini{position:fixed;inset:auto max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) auto;width:320px;height:auto;aspect-ratio:16/9;z-index:2147483000;border-radius:12px;box-shadow:0 18px 44px rgba(0,0,0,.42);animation:mini-in .18s ease-out}
+.player.is-mini .vclose{display:grid}
+.player.is-mini[data-idle] .vclose{opacity:0;pointer-events:none}
+.player.is-mini .vtime,.player.is-mini .vvol{display:none}
+.player.is-mini .vctl{gap:2px;padding:18px 6px 4px}
+.player.is-mini .vb{width:32px;height:32px}
+.player.is-mini .vb svg{width:17px;height:17px}
+.player.is-mini .bigplay{top:50%;width:52px;height:52px;margin:-26px 0 0 -26px}
+.player.is-mini .vhint{padding:0 9px}
+.player.is-mini .vhint span{display:none}
+@keyframes mini-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (max-width:700px){.player.is-mini{width:46vw}.player.is-mini .vseek{display:none}.player.is-mini [data-act="mute"]{margin-left:auto}}
+@media (max-width:480px){.vctl{gap:3px;padding:26px 6px 6px}.vb{width:34px;height:34px}.vtime{font-size:11.5px}.vvol{width:56px}}
+.scene{position:relative;aspect-ratio:1366/768;container-type:inline-size;overflow:hidden;background:var(--mk-wall)}
+.sc-bar{position:absolute;inset:0 0 auto 0;height:1.9cqw;display:flex;justify-content:flex-end;align-items:center;gap:1.1cqw;padding:0 1.4cqw;background:var(--mk-menubar);color:var(--mk-menubar-ink);font-size:1.05cqw;font-weight:600}
+.sc-ic{width:1.55cqw;height:1.15cqw}
+.crd{position:absolute;left:50%;bottom:10.4%;transform:translateX(-50%);display:flex;align-items:center;gap:.6cqw;padding:.5cqw .8cqw;background:var(--mk-crd-bg);border:.29cqw solid var(--mk-crd-frame);border-radius:.37cqw;color:var(--mk-crd-ink);font-size:.82cqw;white-space:nowrap}
+.crd-tog,.crd-stop{background:var(--mk-crd-btn);border:1px solid var(--mk-crd-btn-line);border-radius:.3cqw;color:var(--mk-crd-btn-ink)}
+.crd-tog{display:grid;place-items:center;width:1.6cqw;height:1.6cqw;font-size:.66cqw}
+.crd-msg{margin-right:.3cqw}
+.crd-stop{padding:.2cqw 1cqw}
+.sc-dot{position:absolute;right:3.5cqw;top:3.6cqw;width:2.9cqw;height:2.9cqw;display:grid;place-items:center;border-radius:50%;background:var(--mk-win);box-shadow:0 .3cqw 1cqw rgba(0,0,0,.35)}
+.sc-dot i{width:.95cqw;height:.95cqw;border-radius:50%;background:var(--mk-blue)}
+.shapes{width:100%;max-width:340px;display:grid;gap:2px;justify-items:center}
+.shapes .s-bar{width:100%}
+.shapes .s-pill{width:87.3%}
+.shapes .s-card{width:70.3%}
+.shapes .srow{width:100%;display:flex;align-items:center;justify-content:center;gap:4%}
+.shapes .s-compact{width:44.9%}
+.shapes .s-dot{width:15.3%}
+.dotfig{width:100%;max-width:340px;display:flex;align-items:center;justify-content:center;gap:2%}
+.dotfig .d-c{width:25%}
+.dotfig .d-e{width:62%}
+.dotfig .arr{flex:none;font-size:20px;color:var(--muted)}
+.stopfig{position:relative;width:72%;max-width:270px;margin:0 auto}
+.ptr{position:absolute;width:22px;height:22px;pointer-events:none}
+.stopfig .ptr{left:84%;top:60%;margin:-3px 0 0 -5px}
+.posmk{position:relative;width:100%;max-width:360px;aspect-ratio:16/10;margin:0 auto;overflow:hidden;border-radius:10px;background:var(--mk-wall)}
+.posmk .slot{position:absolute;left:50%;transform:translateX(-50%);width:44%;height:11%;border-radius:999px}
+.posmk .slot.on{top:9%;display:flex;align-items:center;gap:5%;padding:0 2.4% 0 6%;background:var(--mk-win);box-shadow:0 4px 14px rgba(0,0,0,.3)}
+.posmk .slot.on i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--mk-blue)}
+.posmk .slot.on s{flex:1 1 auto;height:3px;border-radius:2px;background:var(--mk-ph)}
+.posmk .slot.on b{flex:none;width:30%;height:64%;border-radius:999px;background:var(--mk-red)}
+.posmk .slot.mid{top:44.5%;border:2px dashed var(--mk-slot)}
+.posmk .slot.low{bottom:9%;border:2px dashed var(--mk-slot)}
+.posmk .ptr{left:63%;top:16%;width:7%;height:auto}
+.prmk{width:100%;max-width:320px;margin:0 auto;overflow:hidden;border-radius:10px;border:1px solid var(--mk-panel-line);background:var(--mk-panel);color:var(--mk-panel-ink);font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.12)}
+.prmk .r{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--mk-panel-line)}
+.prmk .r.save{border-bottom:0;color:var(--mk-link)}
+.prmk .m{color:var(--mk-panel-muted)}
+.prmk .a{color:var(--mk-link);font-weight:600}
+.prmk .ind{padding-left:17px}
+.menumk{width:100%;max-width:260px;margin:0 auto;padding:5px 0;border-radius:10px;border:1px solid var(--mk-panel-line);background:var(--mk-menu);color:var(--mk-menu-ink);font-size:13.5px;line-height:1.5;box-shadow:0 10px 28px rgba(0,0,0,.2)}
+.menumk .i{position:relative;display:flex;justify-content:space-between;gap:10px;padding:2px 12px 2px 26px}
+.menumk .i.dim{color:var(--mk-menu-dim)}
+.menumk .ck{position:absolute;left:10px}
+.menumk .sep{height:1px;margin:5px 10px;background:var(--mk-menu-sep)}
+
+</style>
+<div lang="ko" class="root" data-lang-block="ko">
+<div class="wrap"><header class="hdr">
+<a class="brand" href="#top"><img src="img/icon.png" alt="" width="28" height="28"><span>CRD Window Studio</span></a>
+<nav class="nav" aria-label="사이트 구역"><a href="#why">만든 이유</a><a href="#features">기능</a><a href="#tour">설정 앱</a><a href="#how">동작 방식</a><a href="#install">설치</a></nav>
+<div class="tools"><a href="https://github.com/JHKS24/crd-window-studio"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 19c-4 1.3-4-2-6-2.5M15 21v-3.4a3 3 0 0 0-.8-2.3c2.7-.3 5.6-1.3 5.6-6a4.7 4.7 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6 0C6.6 2.6 5.6 2.9 5.6 2.9a4.3 4.3 0 0 0-.1 3.2A4.7 4.7 0 0 0 4.2 9.3c0 4.6 2.9 5.7 5.6 6a3 3 0 0 0-.8 2.3V21"></path></svg>GitHub</a><div class="langseg" role="group" aria-label="언어"><button type="button" lang="en" data-set-lang="en" aria-pressed="false" title="영어">EN</button><button type="button" lang="ko" data-set-lang="ko" aria-pressed="true" title="한국어">KO</button></div></div>
+</header></div>
+<main id="top">
+<section class="wrap hero">
+<img class="hicon" src="img/icon.png" alt="" width="96" height="96">
+<h1>공유 알림 창을 작은 점 하나로</h1>
+<p class="lead">CRD Window Studio는 Chrome 원격 데스크톱이 Mac에 띄우는 공유 알림 창의 모양과 크기, 자리를 바꿔 줍니다. 작은 점 하나로 줄여 두었다가 두 번 클릭하면 공유 중지 버튼이 나옵니다.</p>
+<div class="btns"><a class="btn pri" href="https://github.com/JHKS24/crd-window-studio">GitHub에서 보기</a><a class="btn ghost" href="#install">소스에서 빌드하기</a></div>
+<p class="note">macOS 14 이상, Apple Silicon과 Intel</p>
+<div class="herofig"><div class="vslot"><div class="player" data-duration="32.000" data-l-play="재생" data-l-pause="일시 정지" data-l-replay="다시 재생" data-l-mute="소리 끄기" data-l-unmute="소리 켜기" data-l-time_of="{dur} 중 {cur}" role="region" aria-label="소개 영상"><video src="video/crd-window-studio-ko.mp4" poster="video/poster-ko.jpg" preload="none" playsinline controls aria-label="CRD Window Studio 소개 영상. 공유 알림 창이 상태 점으로 바뀌고, 두 번 클릭하면 공유 중지 버튼이 나옵니다."></video><button type="button" class="vhint" hidden><svg class="ic-muted" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M11 6l3.5 4M14.5 6L11 10"/></svg><span>아무 곳이나 누르면 소리가 켜집니다</span></button><button type="button" class="bigplay" aria-label="영상 재생" hidden><svg class="ic-play" aria-hidden="true" viewBox="0 0 16 16"><path d="M4.6 2.8v10.4L13 8z" fill="currentColor"/></svg></button><button type="button" class="vclose" aria-label="작은 화면 닫기"><svg class="ic-close" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button><div class="vctl" role="group" aria-label="영상 조작"><button type="button" class="vb" data-act="play" data-icon="play" aria-label="재생"><svg class="ic-play" aria-hidden="true" viewBox="0 0 16 16"><path d="M4.6 2.8v10.4L13 8z" fill="currentColor"/></svg><svg class="ic-pause" aria-hidden="true" viewBox="0 0 16 16"><path d="M4 2.8h2.7v10.4H4zM9.3 2.8H12v10.4H9.3z" fill="currentColor"/></svg><svg class="ic-replay" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.1 8.4a4.9 4.9 0 1 0 1.5-3.6"/><path d="M4.3 1.9v3h3"/></svg></button><span class="vtime"><span data-cur>0:00</span> / <span data-dur>0:32</span></span><input class="vrange vseek" type="range" min="0" max="1000" step="1" value="0" aria-label="재생 위치"><button type="button" class="vb" data-act="mute" data-icon="sound" aria-label="소리 끄기"><svg class="ic-sound" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M10.6 5.6a3.2 3.2 0 0 1 0 4.8M12.6 3.8a5.8 5.8 0 0 1 0 8.4"/></svg><svg class="ic-muted" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M11 6l3.5 4M14.5 6L11 10"/></svg></button><input class="vrange vvol" type="range" min="0" max="100" step="5" value="20" aria-label="음량"></div></div></div></div>
+</section>
+<section id="why" class="wrap sec" aria-labelledby="why-ko">
+<h2 id="why-ko">만든 이유</h2>
+<div class="story"><p>Chrome 원격 데스크톱으로 Mac에 접속하면 화면에 공유 알림 창이 뜹니다. 이 창은 접속을 끊을 때까지 사라지지 않습니다.</p><p>그래서 알림은 남겨 두고, 모양과 자리를 제가 정할 수 있게 만들었습니다. 지금은 화면 오른쪽 위에 작은 점 하나만 띄워 둡니다.</p></div>
+<div class="ba"><figure><div class="shot scene" role="img" aria-label="데스크톱 아래 가운데에 기본 공유 알림 창이 떠 있는 모습"><div class="sc-bar"><span>9:41</span></div><div class="crd"><span class="crd-tog" aria-hidden="true">▲</span><span class="crd-msg">내 컴퓨터를 someone@example.com님과 공유하고 있습니다.</span><span class="crd-stop">공유 중지</span></div></div><figcaption>기본 공유 알림 창</figcaption></figure>
+<figure><div class="shot scene" role="img" aria-label="같은 데스크톱 오른쪽 위에 상태 점만 떠 있는 모습"><div class="sc-bar"><svg class="sc-ic" aria-hidden="true" viewBox="0 0 22 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="1.5" width="19" height="13" rx="3"/><circle cx="7" cy="8" r="2" fill="currentColor" stroke="none"/></svg><span>9:41</span></div><div class="sc-dot"><i></i></div></div><figcaption>상태 점으로 바꾼 모습</figcaption></figure></div>
+</section>
+<section id="features" class="wrap sec" aria-labelledby="feat-ko">
+<h2 id="feat-ko">기능</h2>
+<div class="fgrid"><article class="fcard"><div class="fmedia"><div class="shapes" role="group" aria-label="모양 다섯 가지: 기본 바, 캡슐, 카드, 콤팩트, 상태 점"><img class="th-l s-bar" src="img/helper_shape_bar_light_ko.png" alt="기본 바 모양" width="944" height="160" loading="lazy" decoding="async"><img class="th-d s-bar" src="img/helper_shape_bar_dark_ko.png" alt="기본 바 모양" width="944" height="160" loading="lazy" decoding="async"><img class="th-l s-pill" src="img/helper_shape_pill_light_ko.png" alt="캡슐 모양" width="824" height="160" loading="lazy" decoding="async"><img class="th-d s-pill" src="img/helper_shape_pill_dark_ko.png" alt="캡슐 모양" width="824" height="160" loading="lazy" decoding="async"><img class="th-l s-card" src="img/helper_shape_card_light_ko.png" alt="카드 모양" width="664" height="304" loading="lazy" decoding="async"><img class="th-d s-card" src="img/helper_shape_card_dark_ko.png" alt="카드 모양" width="664" height="304" loading="lazy" decoding="async"><div class="srow"><img class="th-l s-compact" src="img/helper_shape_compact_light_ko.png" alt="콤팩트 모양" width="424" height="144" loading="lazy" decoding="async"><img class="th-d s-compact" src="img/helper_shape_compact_dark_ko.png" alt="콤팩트 모양" width="424" height="144" loading="lazy" decoding="async"><img class="th-l s-dot" src="img/helper_shape_dot_light_ko.png" alt="상태 점 모양" width="144" height="144" loading="lazy" decoding="async"><img class="th-d s-dot" src="img/helper_shape_dot_dark_ko.png" alt="상태 점 모양" width="144" height="144" loading="lazy" decoding="async"></div></div></div><div class="fbody"><h3>모양 다섯 가지</h3><p>기본 바, 캡슐, 콤팩트, 카드, 상태 점 가운데 하나를 고릅니다. 크기와 모서리 둥글기를 따로 정하려면 직접 지정을 고릅니다.</p></div></article><article class="fcard"><div class="fmedia"><div class="dotfig"><img class="th-l d-c" src="img/helper_dot_collapsed_light_ko.png" alt="접힌 상태 점" width="148" height="148" loading="lazy" decoding="async"><img class="th-d d-c" src="img/helper_dot_collapsed_dark_ko.png" alt="접힌 상태 점" width="148" height="148" loading="lazy" decoding="async"><span class="arr" aria-hidden="true">→</span><img class="th-l d-e" src="img/helper_capsule_dot_light_ko.png" alt="두 번 클릭하면 상태 점이 늘어나며 빨간 공유 중지 버튼이 나온 모습" width="358" height="148" loading="lazy" decoding="async"><img class="th-d d-e" src="img/helper_capsule_dot_dark_ko.png" alt="두 번 클릭하면 상태 점이 늘어나며 빨간 공유 중지 버튼이 나온 모습" width="358" height="148" loading="lazy" decoding="async"></div></div><div class="fbody"><h3>두 번 클릭하면 열리는 점</h3><p>상태 점은 작은 동그라미 하나입니다. 두 번 클릭하면 옆으로 늘어나면서 공유 중지 버튼이 나오고, 정해 둔 시간이 지나면 다시 점으로 접힙니다. 시간은 1초에서 30초 사이로 정하거나, 직접 접을 때까지 열어 둘 수 있습니다.</p></div></article><article class="fcard"><div class="fmedia"><div class="posmk" role="img" aria-label="상단 가운데, 가운데, 하단 가운데 세 자리 가운데 상단 가운데에 창을 둔 모습"><div class="slot on"><i></i><s></s><b></b></div><div class="slot mid"></div><div class="slot low"></div><svg class="ptr" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.6L10 19z" fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div></div><div class="fbody"><h3>원하는 자리에</h3><p>가운데, 상단 가운데, 하단 가운데 중에 고르거나 직접 지정에서 좌표를 넣습니다. 창을 끌어서 옮기면 그 자리가 저장됩니다. 모니터가 여러 대면 띄울 화면도 고를 수 있습니다.</p></div></article><article class="fcard"><div class="fmedia"><div class="prmk" role="img" aria-label="저장된 프리셋 두 개와 현재 창을 프리셋으로 저장 항목"><div class="r"><span>✓ 작은 점</span><span class="m">적용됨</span></div><div class="r"><span class="ind">넓은 바</span><span class="a">적용</span></div><div class="r save">현재 창을 프리셋으로 저장</div></div></div><div class="fbody"><h3>프리셋</h3><p>마음에 드는 모양과 자리를 이름을 붙여 저장해 둡니다. 20개까지 저장할 수 있고, 메뉴 막대나 창의 오른쪽 클릭 메뉴에서 바로 바꿉니다.</p></div></article><article class="fcard"><div class="fmedia"><div class="menumk" role="img" aria-label="메뉴 막대 아이콘의 메뉴: 공유 창 바꾸기, 꾸민 창과 원래 공유 창, 가운데로 이동, 위치 잠금과 크기 잠금, 프리셋, 설정 열기, 공유 중지"><div class="i dim"><span>작동 중</span></div><div class="sep"></div><div class="i"><span class="ck" aria-hidden="true">✓</span><span>공유 창 바꾸기</span></div><div class="sep"></div><div class="i"><span class="ck" aria-hidden="true">✓</span><span>꾸민 창</span></div><div class="i"><span>원래 공유 창</span></div><div class="sep"></div><div class="i"><span>가운데로 이동</span></div><div class="i"><span class="ck" aria-hidden="true">✓</span><span>위치 잠금</span></div><div class="i"><span>크기 잠금</span></div><div class="i"><span>프리셋</span><span aria-hidden="true">›</span></div><div class="sep"></div><div class="i"><span>설정 열기</span></div><div class="sep"></div><div class="i"><span>공유 중지</span></div></div></div><div class="fbody"><h3>메뉴 막대</h3><p>메뉴 막대 아이콘에서 지금 상태를 확인합니다. 메뉴에서 공유 창 바꾸기를 켜고 끄거나 표시 방식, 잠금, 프리셋을 바꾸고, 가운데로 이동과 공유 중지도 바로 누릅니다.</p></div></article><article class="fcard"><div class="fmedia"><div class="stopfig" role="img" aria-label="상태 점이 열려 빨간 공유 중지 버튼이 보이는 모습"><img class="th-l" src="img/helper_capsule_pill_light_ko.png" alt="" width="362" height="148" loading="lazy" decoding="async"><img class="th-d" src="img/helper_capsule_pill_dark_ko.png" alt="" width="362" height="148" loading="lazy" decoding="async"><svg class="ptr" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.6L10 19z" fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div></div><div class="fbody"><h3>잘못 눌리지 않는 공유 중지</h3><p>점을 여는 두 번 클릭이나 메뉴를 닫는 클릭은 공유 중지로 이어지지 않습니다. 따로 한 번 눌러야 동작하고, 누르면 Chrome 원격 데스크톱의 원래 공유 중지 버튼이 눌립니다.</p></div></article></div>
+<div class="tgrid"><article class="tcard"><h3>위치 잠금과 크기 잠금</h3><p>자리와 크기를 정했으면 잠가 둡니다. 잠근 동안에는 잘못 끌거나 모서리를 잡아당겨도 움직이거나 크기가 바뀌지 않습니다.</p></article><article class="tcard"><h3>색과 테두리</h3><p>라이트, 다크, 자동 중에 고르고, 강조 색상은 시스템이나 여덟 가지 색 중에서 고릅니다. 배경 색상과 글자 색상, 모서리 둥글기, 테두리 두께, 글자 크기, 불투명도, 그림자도 바꿀 수 있습니다.</p></article><article class="tcard"><h3>원래 창으로 바로</h3><p>표시 방식을 원래 공유 창으로 바꾸거나 창 도우미를 끄면 원래 알림 창이 곧바로 돌아옵니다. 도우미가 꺼질 때도 원래 창부터 되돌려 놓고 끝납니다.</p></article><article class="tcard"><h3>한국어와 영어</h3><p>설정 앱과 메뉴는 한국어와 영어로 나옵니다. macOS 언어 설정을 따릅니다.</p></article><article class="tcard"><h3>기록은 이 Mac에만</h3><p>설정과 창 상태가 바뀐 기록은 이 Mac에만 남고 24시간이 지나면 지워집니다. 파일은 1MB를 넘지 않고, 어디로도 보내지 않습니다.</p></article></div>
+</section>
+<section id="tour" class="wrap sec" aria-labelledby="tour-ko">
+<h2 id="tour-ko">설정 앱</h2>
+<p class="intro">설정은 네 화면으로 나뉩니다. 바꾼 값은 바로 적용되고, 따로 저장 버튼을 누를 필요가 없습니다.</p>
+<div class="tour"><figure><img class="th-l" src="img/display_site_light_ko.png" alt="설정 앱의 표시 화면" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/display_site_dark_ko.png" alt="설정 앱의 표시 화면" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>표시</strong><span>지금 상태를 확인하고 공유 창 바꾸기와 표시 방식을 고릅니다.</span></figcaption></figure><figure><img class="th-l" src="img/position_site_light_ko.png" alt="설정 앱의 위치와 크기 화면" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/position_site_dark_ko.png" alt="설정 앱의 위치와 크기 화면" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>위치와 크기</strong><span>미리보기를 보면서 자리와 크기를 정하고 잠급니다.</span></figcaption></figure><figure><img class="th-l" src="img/appearance_site_light_ko.png" alt="설정 앱의 모양 화면" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/appearance_site_dark_ko.png" alt="설정 앱의 모양 화면" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>모양</strong><span>창 모양, 프리셋, 상태 점, 색상, 테두리와 글자, 이동 핸들을 정합니다.</span></figcaption></figure><figure><img class="th-l" src="img/helper_site_light_ko.png" alt="설정 앱의 문제 해결 화면" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/helper_site_dark_ko.png" alt="설정 앱의 문제 해결 화면" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>문제 해결</strong><span>점검 목록으로 도우미, 권한, 공유 창, Chrome 원격 데스크톱 상태를 확인하고, 기록과 설정 파일을 다룹니다.</span></figcaption></figure></div>
+<p class="intro">실제 크기 미리보기 창을 띄우면 그 창을 옮기고 늘리는 대로 자리와 크기가 저장됩니다.</p>
+</section>
+<section id="how" class="wrap sec" aria-labelledby="how-ko">
+<h2 id="how-ko">동작 방식</h2>
+<ol class="steps"><li>설정 앱에서 바꾼 값은 config.json 파일 하나에 저장됩니다.</li><li>창 도우미는 launchd가 관리하는 작은 백그라운드 앱입니다. 이 파일을 지켜보다가 바뀌면 곧바로 반영합니다.</li><li>도우미는 손쉬운 사용 권한(macOS 27에서는 기기 제어 및 데이터 접근)으로 Chrome 원격 데스크톱의 공유 알림 창을 찾습니다. 창 구조가 정확히 맞을 때만 원래 창을 가리고 그 자리에 새 창을 띄웁니다.</li><li>새 창의 공유 중지 버튼은 원래 창의 공유 중지 버튼을 대신 누릅니다. 연결을 끊는 일은 Chrome 원격 데스크톱이 직접 합니다.</li><li>Chrome 원격 데스크톱의 파일은 고치지도 바꾸지도 않습니다. 화면 기록 권한도 쓰지 않습니다.</li></ol>
+</section>
+<section id="install" class="wrap sec" aria-labelledby="inst-ko">
+<h2 id="inst-ko">설치</h2>
+<div class="inst"><p>소스에서 바로 빌드합니다. macOS 14 이상, Xcode 또는 Command Line Tools(Swift 5.9 이상), Python 3이 필요하고, 이 Mac에 Chrome 원격 데스크톱이 설정되어 있어야 합니다.</p>
+<pre><code>git clone https://github.com/JHKS24/crd-window-studio.git
+cd crd-window-studio
+./scripts/build.sh --all --universal
+open &quot;dist/CRD Window Studio.app&quot;</code></pre>
+<p>앱을 ~/Applications처럼 옮기지 않을 자리에 두고, 표시 화면에서 창 도우미 켜기를 누릅니다. macOS가 권한을 물으면 시스템 설정 &gt; 개인정보 보호 및 보안 &gt; 기기 제어 및 데이터 접근에서 CRD Window Host를 켭니다. macOS 26까지는 같은 곳의 손쉬운 사용 항목입니다.</p>
+<p><a href="https://github.com/JHKS24/crd-window-studio/blob/main/BUILDING.ko.md">빌드 옵션과 명령줄로 설치하는 방법은 BUILDING 문서에 정리해 두었습니다.</a></p></div>
+</section>
+</main>
+<footer class="foot"><div class="wrap"><p>MIT 라이선스로 공개합니다. CRD Window Studio는 Google, Apple과 관계없는 비공식 도구입니다. Chrome과 Chrome 원격 데스크톱은 Google LLC의 상표입니다.</p><nav aria-label="GitHub"><a href="https://github.com/JHKS24/crd-window-studio">GitHub</a><a href="https://github.com/JHKS24/crd-window-studio/blob/main/LICENSE">라이선스</a><a href="https://github.com/JHKS24/crd-window-studio/blob/main/docs/PRIVACY.md">개인정보</a><a href="https://github.com/JHKS24/crd-window-studio/blob/main/SECURITY.md">보안</a></nav></div></footer>
+</div>
+<div lang="en" class="root" data-lang-block="en" hidden>
+<div class="wrap"><header class="hdr">
+<a class="brand" href="#en-top"><img src="img/icon.png" alt="" width="28" height="28"><span>CRD Window Studio</span></a>
+<nav class="nav" aria-label="Sections"><a href="#en-why">Why</a><a href="#en-features">Features</a><a href="#en-tour">Settings</a><a href="#en-how">How it works</a><a href="#en-install">Install</a></nav>
+<div class="tools"><a href="https://github.com/JHKS24/crd-window-studio"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 19c-4 1.3-4-2-6-2.5M15 21v-3.4a3 3 0 0 0-.8-2.3c2.7-.3 5.6-1.3 5.6-6a4.7 4.7 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6 0C6.6 2.6 5.6 2.9 5.6 2.9a4.3 4.3 0 0 0-.1 3.2A4.7 4.7 0 0 0 4.2 9.3c0 4.6 2.9 5.7 5.6 6a3 3 0 0 0-.8 2.3V21"></path></svg>GitHub</a><div class="langseg" role="group" aria-label="Language"><button type="button" lang="en" data-set-lang="en" aria-pressed="true" title="English">EN</button><button type="button" lang="ko" data-set-lang="ko" aria-pressed="false" title="Korean">KO</button></div></div>
+</header></div>
+<main id="en-top">
+<section class="wrap hero">
+<img class="hicon" src="img/icon.png" alt="" width="96" height="96">
+<h1>Shrink the sharing notice to a single dot</h1>
+<p class="lead">CRD Window Studio changes the shape, size and position of the sharing notice Chrome Remote Desktop shows on a Mac. Keep it as a small dot, and double-click it when you want the Stop Sharing button.</p>
+<div class="btns"><a class="btn pri" href="https://github.com/JHKS24/crd-window-studio">View on GitHub</a><a class="btn ghost" href="#en-install">Build from source</a></div>
+<p class="note">macOS 14 or later, Apple silicon and Intel</p>
+<div class="herofig"><div class="vslot"><div class="player" data-duration="32.000" data-l-play="Play" data-l-pause="Pause" data-l-replay="Play again" data-l-mute="Mute" data-l-unmute="Unmute" data-l-time_of="{cur} of {dur}" role="region" aria-label="Film"><video src="video/crd-window-studio-en.mp4" poster="video/poster-en.jpg" preload="none" playsinline controls aria-label="CRD Window Studio film. The sharing notice turns into a status dot, and a double-click shows the Stop Sharing button."></video><button type="button" class="vhint" hidden><svg class="ic-muted" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M11 6l3.5 4M14.5 6L11 10"/></svg><span>Tap or click anywhere for sound</span></button><button type="button" class="bigplay" aria-label="Play the film" hidden><svg class="ic-play" aria-hidden="true" viewBox="0 0 16 16"><path d="M4.6 2.8v10.4L13 8z" fill="currentColor"/></svg></button><button type="button" class="vclose" aria-label="Close the mini player"><svg class="ic-close" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button><div class="vctl" role="group" aria-label="Film controls"><button type="button" class="vb" data-act="play" data-icon="play" aria-label="Play"><svg class="ic-play" aria-hidden="true" viewBox="0 0 16 16"><path d="M4.6 2.8v10.4L13 8z" fill="currentColor"/></svg><svg class="ic-pause" aria-hidden="true" viewBox="0 0 16 16"><path d="M4 2.8h2.7v10.4H4zM9.3 2.8H12v10.4H9.3z" fill="currentColor"/></svg><svg class="ic-replay" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.1 8.4a4.9 4.9 0 1 0 1.5-3.6"/><path d="M4.3 1.9v3h3"/></svg></button><span class="vtime"><span data-cur>0:00</span> / <span data-dur>0:32</span></span><input class="vrange vseek" type="range" min="0" max="1000" step="1" value="0" aria-label="Seek"><button type="button" class="vb" data-act="mute" data-icon="sound" aria-label="Mute"><svg class="ic-sound" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M10.6 5.6a3.2 3.2 0 0 1 0 4.8M12.6 3.8a5.8 5.8 0 0 1 0 8.4"/></svg><svg class="ic-muted" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M11 6l3.5 4M14.5 6L11 10"/></svg></button><input class="vrange vvol" type="range" min="0" max="100" step="5" value="20" aria-label="Volume"></div></div></div></div>
+</section>
+<section id="en-why" class="wrap sec" aria-labelledby="why-en">
+<h2 id="why-en">Why I made it</h2>
+<div class="story"><p>When you connect to a Mac with Chrome Remote Desktop, a sharing notice appears on the screen. It doesn&#x27;t go away until you disconnect.</p><p>So the notice stays, and I choose its shape and where it sits. Mine is a small dot in the top right corner now.</p></div>
+<div class="ba"><figure><div class="shot scene" role="img" aria-label="A desktop with the default sharing notice at the bottom center"><div class="sc-bar"><span>9:41</span></div><div class="crd"><span class="crd-tog" aria-hidden="true">▲</span><span class="crd-msg">Your desktop is currently shared with someone@example.com.</span><span class="crd-stop">Stop Sharing</span></div></div><figcaption>The default sharing notice</figcaption></figure>
+<figure><div class="shot scene" role="img" aria-label="The same desktop with only the small status dot in the top right corner"><div class="sc-bar"><svg class="sc-ic" aria-hidden="true" viewBox="0 0 22 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="1.5" width="19" height="13" rx="3"/><circle cx="7" cy="8" r="2" fill="currentColor" stroke="none"/></svg><span>9:41</span></div><div class="sc-dot"><i></i></div></div><figcaption>The same screen with the status dot</figcaption></figure></div>
+</section>
+<section id="en-features" class="wrap sec" aria-labelledby="feat-en">
+<h2 id="feat-en">Features</h2>
+<div class="fgrid"><article class="fcard"><div class="fmedia"><div class="shapes" role="group" aria-label="The five shapes: Default Bar, Capsule, Card, Compact and Status Dot"><img class="th-l s-bar" src="img/helper_shape_bar_light_en.png" alt="Default Bar shape" width="944" height="160" loading="lazy" decoding="async"><img class="th-d s-bar" src="img/helper_shape_bar_dark_en.png" alt="Default Bar shape" width="944" height="160" loading="lazy" decoding="async"><img class="th-l s-pill" src="img/helper_shape_pill_light_en.png" alt="Capsule shape" width="824" height="160" loading="lazy" decoding="async"><img class="th-d s-pill" src="img/helper_shape_pill_dark_en.png" alt="Capsule shape" width="824" height="160" loading="lazy" decoding="async"><img class="th-l s-card" src="img/helper_shape_card_light_en.png" alt="Card shape" width="664" height="304" loading="lazy" decoding="async"><img class="th-d s-card" src="img/helper_shape_card_dark_en.png" alt="Card shape" width="664" height="304" loading="lazy" decoding="async"><div class="srow"><img class="th-l s-compact" src="img/helper_shape_compact_light_en.png" alt="Compact shape" width="424" height="144" loading="lazy" decoding="async"><img class="th-d s-compact" src="img/helper_shape_compact_dark_en.png" alt="Compact shape" width="424" height="144" loading="lazy" decoding="async"><img class="th-l s-dot" src="img/helper_shape_dot_light_en.png" alt="Status Dot shape" width="144" height="144" loading="lazy" decoding="async"><img class="th-d s-dot" src="img/helper_shape_dot_dark_en.png" alt="Status Dot shape" width="144" height="144" loading="lazy" decoding="async"></div></div></div><div class="fbody"><h3>Five shapes</h3><p>Pick Default Bar, Capsule, Compact, Card or Status Dot. Choose Custom to set the size and corner radius yourself.</p></div></article><article class="fcard"><div class="fmedia"><div class="dotfig"><img class="th-l d-c" src="img/helper_dot_collapsed_light_en.png" alt="The status dot, folded" width="148" height="148" loading="lazy" decoding="async"><img class="th-d d-c" src="img/helper_dot_collapsed_dark_en.png" alt="The status dot, folded" width="148" height="148" loading="lazy" decoding="async"><span class="arr" aria-hidden="true">→</span><img class="th-l d-e" src="img/helper_capsule_dot_light_en.png" alt="After a double-click, the status dot stretches out with a red Stop Sharing button" width="368" height="148" loading="lazy" decoding="async"><img class="th-d d-e" src="img/helper_capsule_dot_dark_en.png" alt="After a double-click, the status dot stretches out with a red Stop Sharing button" width="368" height="148" loading="lazy" decoding="async"></div></div><div class="fbody"><h3>A dot that opens</h3><p>The status dot is one small circle. Double-click it and it stretches into a capsule with a Stop Sharing button, then folds back after the delay you choose, anywhere from 1 to 30 seconds. You can also keep it open until you close it yourself.</p></div></article><article class="fcard"><div class="fmedia"><div class="posmk" role="img" aria-label="A screen with three spots, Top Center, Center and Bottom Center, with the window at Top Center"><div class="slot on"><i></i><s></s><b></b></div><div class="slot mid"></div><div class="slot low"></div><svg class="ptr" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.6L10 19z" fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div></div><div class="fbody"><h3>Wherever you want it</h3><p>Choose Center, Top Center or Bottom Center, or select Custom to enter coordinates. Drag the window and its new spot is saved. With more than one display, choose which one it appears on.</p></div></article><article class="fcard"><div class="fmedia"><div class="prmk" role="img" aria-label="Two saved presets and the Save Current Window as Preset item"><div class="r"><span>✓ Small dot</span><span class="m">Applied</span></div><div class="r"><span class="ind">Wide bar</span><span class="a">Apply</span></div><div class="r save">Save Current Window as Preset</div></div></div><div class="fbody"><h3>Presets</h3><p>Save a look and position under a name. You can keep up to 20 and swap between them from the menu bar or the window&#x27;s right-click menu.</p></div></article><article class="fcard"><div class="fmedia"><div class="menumk" role="img" aria-label="The menu bar icon&#x27;s menu: Replace Sharing Window, Custom Window or Original Sharing Window, Center Window, the locks, Presets, Open Settings and Stop Sharing"><div class="i dim"><span>Working</span></div><div class="sep"></div><div class="i"><span class="ck" aria-hidden="true">✓</span><span>Replace Sharing Window</span></div><div class="sep"></div><div class="i"><span class="ck" aria-hidden="true">✓</span><span>Custom Window</span></div><div class="i"><span>Original Sharing Window</span></div><div class="sep"></div><div class="i"><span>Center Window</span></div><div class="i"><span class="ck" aria-hidden="true">✓</span><span>Lock Position</span></div><div class="i"><span>Lock Size</span></div><div class="i"><span>Presets</span><span aria-hidden="true">›</span></div><div class="sep"></div><div class="i"><span>Open Settings</span></div><div class="sep"></div><div class="i"><span>Stop Sharing</span></div></div></div><div class="fbody"><h3>Menu bar</h3><p>The menu bar icon shows the current state. From its menu you can switch Replace Sharing Window on or off, change the display mode, center the window, toggle the locks and apply presets. Stop Sharing is there too.</p></div></article><article class="fcard"><div class="fmedia"><div class="stopfig" role="img" aria-label="The opened status dot with the red Stop Sharing button"><img class="th-l" src="img/helper_capsule_pill_light_en.png" alt="" width="372" height="148" loading="lazy" decoding="async"><img class="th-d" src="img/helper_capsule_pill_dark_en.png" alt="" width="372" height="148" loading="lazy" decoding="async"><svg class="ptr" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.6L10 19z" fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div></div><div class="fbody"><h3>Stop Sharing that waits for you</h3><p>The double-click that opens the dot and the click that closes a menu never reach Stop Sharing. It takes a separate single click, and that click presses Chrome Remote Desktop&#x27;s own Stop Sharing button.</p></div></article></div>
+<div class="tgrid"><article class="tcard"><h3>Lock Position and Lock Size</h3><p>Lock the position and size once they&#x27;re set. While locked, a stray drag or a pulled corner won&#x27;t move or resize the window.</p></article><article class="tcard"><h3>Colors and borders</h3><p>Choose Light, Dark or Auto, and set the accent color to System or one of eight colors. Background and text colors, corner radius, border width, text size, opacity and shadow can be changed too.</p></article><article class="tcard"><h3>The original, one switch away</h3><p>Set the display mode to Original Sharing Window or turn the window helper off, and the original notice comes back right away. The helper also puts it back before it quits.</p></article><article class="tcard"><h3>Korean and English</h3><p>The settings app and the menus are in Korean and English, following your macOS language.</p></article><article class="tcard"><h3>Logs stay on this Mac</h3><p>Changes to settings and window state are logged on this Mac only, kept for 24 hours and capped at 1 MB. Nothing is sent anywhere.</p></article></div>
+</section>
+<section id="en-tour" class="wrap sec" aria-labelledby="tour-en">
+<h2 id="tour-en">The settings app</h2>
+<p class="intro">Settings are split across four pages. Changes apply as you make them, so there&#x27;s no Save button.</p>
+<div class="tour"><figure><img class="th-l" src="img/display_site_light_en.png" alt="The Visibility page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/display_site_dark_en.png" alt="The Visibility page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>Visibility</strong><span>The current state, the Replace Sharing Window switch and the display mode.</span></figcaption></figure><figure><img class="th-l" src="img/position_site_light_en.png" alt="The Position and Size page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/position_site_dark_en.png" alt="The Position and Size page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>Position and Size</strong><span>Set the position and size against a live preview, then lock them.</span></figcaption></figure><figure><img class="th-l" src="img/appearance_site_light_en.png" alt="The Appearance page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/appearance_site_dark_en.png" alt="The Appearance page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>Appearance</strong><span>Window shape, presets, the status dot, colors, border and text, and the move handle.</span></figcaption></figure><figure><img class="th-l" src="img/helper_site_light_en.png" alt="The Troubleshooting page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><img class="th-d" src="img/helper_site_dark_en.png" alt="The Troubleshooting page of the settings app" width="1100" height="1062" loading="lazy" decoding="async"><figcaption><strong>Troubleshooting</strong><span>A checklist for the helper, the permission, the sharing window and Chrome Remote Desktop, plus the log and the settings file.</span></figcaption></figure></div>
+<p class="intro">Open the real-size preview, and the position and size follow that window as you move and resize it.</p>
+</section>
+<section id="en-how" class="wrap sec" aria-labelledby="how-en">
+<h2 id="how-en">How it works</h2>
+<ol class="steps"><li>Everything you change in the settings app is saved to one config.json file.</li><li>The window helper is a small background app run by launchd. It watches that file and applies changes right away.</li><li>With the Accessibility permission (Device Control and Data Access on macOS 27), the helper looks for Chrome Remote Desktop&#x27;s sharing notice. Only when the window&#x27;s structure matches exactly does it hide the original and show its own window in that place.</li><li>The Stop Sharing button in the new window presses the original button for you. Chrome Remote Desktop ends the session itself.</li><li>No Chrome Remote Desktop files are changed or replaced, and no screen recording permission is used.</li></ol>
+</section>
+<section id="en-install" class="wrap sec" aria-labelledby="inst-en">
+<h2 id="inst-en">Install</h2>
+<div class="inst"><p>Build it from source. You&#x27;ll need macOS 14 or later, Xcode or the Command Line Tools (Swift 5.9 or later), Python 3, and Chrome Remote Desktop already set up on the Mac.</p>
+<pre><code>git clone https://github.com/JHKS24/crd-window-studio.git
+cd crd-window-studio
+./scripts/build.sh --all --universal
+open &quot;dist/CRD Window Studio.app&quot;</code></pre>
+<p>Move the app somewhere it will stay, such as ~/Applications, and click Turn On Window Helper on the Visibility page. When macOS asks, turn on CRD Window Host in System Settings &gt; Privacy &amp; Security &gt; Device Control and Data Access. On macOS 26 and earlier it&#x27;s under Accessibility in the same place.</p>
+<p><a href="https://github.com/JHKS24/crd-window-studio/blob/main/BUILDING.md">Build options and command-line setup are in BUILDING.md.</a></p></div>
+</section>
+</main>
+<footer class="foot"><div class="wrap"><p>Released under the MIT License. CRD Window Studio is an independent project, not affiliated with Google or Apple. Chrome and Chrome Remote Desktop are trademarks of Google LLC.</p><nav aria-label="GitHub"><a href="https://github.com/JHKS24/crd-window-studio">GitHub</a><a href="https://github.com/JHKS24/crd-window-studio/blob/main/LICENSE">License</a><a href="https://github.com/JHKS24/crd-window-studio/blob/main/docs/PRIVACY.md">Privacy</a><a href="https://github.com/JHKS24/crd-window-studio/blob/main/SECURITY.md">Security</a></nav></div></footer>
+</div>
+<script>
+(function () {
+  "use strict";
+  var LANG_KEY = "crd-window-studio.lang", VOL_KEY = "crd-window-studio.volume", MUTE_KEY = "crd-window-studio.muted";
+  var META = {"ko": {"title": "CRD Window Studio", "description": "Chrome 원격 데스크톱으로 접속한 Mac에 뜨는 공유 알림 창을 원하는 모양과 자리로 바꿔 주는 macOS 앱"}, "en": {"title": "CRD Window Studio", "description": "A macOS app that changes the shape and position of the sharing notice Chrome Remote Desktop shows on the Mac you connect to."}};
+  var reduce = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+  function read(k) { try { return window.localStorage.getItem(k); } catch (err) { return null; } }
+  function write(k, val) { try { window.localStorage.setItem(k, val); } catch (err) {} }
+  function fmt(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
+
+  // Volume starts at 20% and is remembered in this browser. iOS keeps media volume read-only,
+  // so there the slider is hidden and the mute button does the work.
+  var vol = parseFloat(read(VOL_KEY));
+  if (!(vol >= 0.01 && vol <= 1)) { vol = 0.2; }
+  var userMuted = read(MUTE_KEY) === "1";
+  var volumeWorks = (function () {
+    try { var t = document.createElement("video"); t.volume = 0.5; return Math.abs(t.volume - 0.5) < 0.01; } catch (err) { return false; }
+  })();
+
+  var players = [];
+
+  // Browsers refuse sound until the visitor clicks, taps or presses a key on the page. Asking anyway only logs an
+  // error, so the film starts muted unless sound is already allowed, and the first such gesture turns sound on.
+  function soundAllowed() {
+    try { if (navigator.getAutoplayPolicy) { return navigator.getAutoplayPolicy("mediaelement") === "allowed"; } } catch (err) {}
+    return !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
+  }
+  var GESTURES = ["pointerdown", "keydown", "touchend", "click"], armed = false;
+  function onGesture(ev) {
+    if (ev.type === "keydown" && /^(Escape|Shift|Control|Alt|Meta|CapsLock)$/.test(ev.key || "")) { return; }
+    // A touch pointerdown is not a gesture yet; unmuting then would pause the film, so wait for touchend or click.
+    if (navigator.userActivation && !navigator.userActivation.isActive) { return; }
+    var t = ev.target;
+    if (t && t.closest && t.closest(".vctl")) { return; }
+    var waiting = false;
+    players.forEach(function (pl) {
+      if (pl.st.policyMuted && pl.visible()) { pl.unmuteFromGesture(); }
+      if (pl.st.policyMuted) { waiting = true; }
+    });
+    if (!waiting) { disarm(); }
+  }
+  function arm() { if (!armed) { armed = true; GESTURES.forEach(function (n) { document.addEventListener(n, onGesture, true); }); } }
+  function disarm() { if (armed) { armed = false; GESTURES.forEach(function (n) { document.removeEventListener(n, onGesture, true); }); } }
+
+  function Player(p) {
+    var self = this;
+    var st = self.st = { started: false, policyMuted: false, blocked: false, userPaused: false, mini: false, dismissed: false,
+      dragging: false, past: false, unmutedAt: 0, idle: 0, pointer: "mouse", wasIdle: false, pendingSeek: -1 };
+    var v = p.querySelector("video"), slot = self.slot = p.parentNode, block = p.closest("[data-lang-block]");
+    function q(s) { return p.querySelector(s); }
+    var bPlay = q('[data-act="play"]'), bMute = q('[data-act="mute"]'), seek = q(".vseek"), volR = q(".vvol"),
+      tCur = q("[data-cur]"), tDur = q("[data-dur]"), big = q(".bigplay"), hint = q(".vhint"), bClose = q(".vclose");
+    function label(k) { return p.getAttribute("data-l-" + k) || ""; }
+    var hintDur = parseFloat(p.getAttribute("data-duration")) || 0;
+
+    v.controls = false;
+    v.removeAttribute("controls");
+    if (!volumeWorks) { p.setAttribute("data-novol", ""); }
+
+    self.visible = function () { return !block.hidden; };
+    self.playing = function () { return !v.paused && !v.ended; };
+    self.time = function () { return st.pendingSeek >= 0 ? st.pendingSeek : (v.currentTime || 0); };
+    function dur() { return isFinite(v.duration) && v.duration > 0 ? v.duration : hintDur; }
+    function soundOff() { return st.started ? v.muted : userMuted; }
+    function applyVol() { if (volumeWorks) { try { v.volume = vol; } catch (err) {} } }
+    function load() { if (v.readyState === 0 && v.preload !== "auto") { v.preload = "auto"; try { v.load(); } catch (err) {} } }
+
+    function render() {
+      var playing = self.playing(), ended = v.ended, off = soundOff();
+      p.setAttribute("data-state", playing ? "playing" : (ended ? "ended" : (st.started ? "paused" : "idle")));
+      var icon = playing ? "pause" : (ended ? "replay" : "play");
+      bPlay.setAttribute("data-icon", icon);
+      bPlay.setAttribute("aria-label", label(icon));
+      bMute.setAttribute("data-icon", off ? "muted" : "sound");
+      bMute.setAttribute("aria-label", label(off ? "unmute" : "mute"));
+      var d = dur(), c = st.dragging ? seek.value / 1000 * d : self.time();
+      if (!st.dragging) { seek.value = d ? Math.round(c / d * 1000) : 0; }
+      seek.style.setProperty("--p", (d ? Math.min(100, c / d * 100) : 0).toFixed(2) + "%");
+      seek.setAttribute("aria-valuetext", label("time_of").replace("{cur}", fmt(c)).replace("{dur}", fmt(d)));
+      tCur.textContent = fmt(c);
+      tDur.textContent = fmt(d);
+      var pct = off ? 0 : Math.round(vol * 100);
+      volR.value = pct;
+      volR.style.setProperty("--p", pct + "%");
+      volR.setAttribute("aria-valuetext", pct + "%");
+      // The big button is for a film that has not started: reduced motion, or a browser that blocks even muted play.
+      // At the end the end card stays clear and the control bar offers the replay.
+      big.hidden = playing || ended || !(st.blocked || (!st.started && reduce));
+      hint.hidden = !(st.policyMuted && playing);
+    }
+
+    function seekTo(t) {
+      var d = dur();
+      t = Math.max(0, d ? Math.min(d, t) : t);
+      if (v.readyState >= 1) { v.currentTime = t; st.pendingSeek = -1; } else { st.pendingSeek = t; load(); }
+      render();
+    }
+
+    function play(withSound) {
+      st.started = true; st.userPaused = false; st.blocked = false;
+      applyVol();
+      if (withSound) { st.policyMuted = false; v.muted = userMuted; }
+      if (st.pendingSeek >= 0 && v.readyState >= 1) { v.currentTime = st.pendingSeek; st.pendingSeek = -1; }
+      var pr = v.play();
+      if (pr && pr.catch) { pr.catch(function (err) { if (!err || err.name !== "AbortError") { st.blocked = true; } render(); }); }
+      render();
+    }
+
+    self.autoStart = function () {
+      if (st.started || reduce) { return; }
+      st.started = true;
+      applyVol();
+      v.muted = userMuted || !soundAllowed();
+      if (v.muted && !userMuted) { st.policyMuted = true; arm(); }
+      var pr = v.play();
+      render();
+      if (!pr || !pr.then) { return; }
+      pr.then(render, function (err) {
+        if (err && err.name === "AbortError") { render(); return; }
+        if (v.muted) { st.policyMuted = false; st.blocked = true; render(); return; }
+        // Sound was refused: keep playing muted, show the hint and wait for the first click or key press.
+        v.muted = true;
+        st.policyMuted = true;
+        var p2 = v.play();
+        if (p2 && p2.catch) { p2.catch(function () { st.policyMuted = false; st.blocked = true; render(); }); }
+        arm();
+        render();
+      });
+    };
+
+    self.unmuteFromGesture = function () {
+      st.policyMuted = false;
+      st.unmutedAt = Date.now();
+      applyVol();
+      v.muted = false;
+      render();
+      setTimeout(function () {
+        // A browser that did not count the event as a gesture pauses instead; go back to muted play and keep waiting.
+        if (self.visible() && v.paused && !v.ended && !st.userPaused) {
+          v.muted = true;
+          st.policyMuted = true;
+          var pr = v.play();
+          if (pr && pr.catch) { pr.catch(function () {}); }
+          arm();
+          render();
+        }
+      }, 150);
+    };
+
+    function toggle() { if (v.paused || v.ended) { play(true); } else { st.userPaused = true; v.pause(); } }
+    function toggleMute() {
+      if (soundOff()) {
+        userMuted = false; st.policyMuted = false;
+        if (vol < 0.01) { vol = 0.2; }
+        applyVol();
+        v.muted = false;
+      } else {
+        userMuted = true;
+        v.muted = true;
+      }
+      write(MUTE_KEY, userMuted ? "1" : "0");
+      write(VOL_KEY, String(vol));
+      render();
+    }
+
+    // Mini player: while the film plays and its place in the hero is scrolled past, the same player
+    // sits fixed in the bottom right corner. The slot keeps its size, so the page does not move.
+    function setMini(on) {
+      if (st.mini === on) { return; }
+      st.mini = on;
+      p.classList.toggle("is-mini", on);
+      slot.classList.toggle("has-mini", on);
+      wake();
+    }
+    // ratio: how much of the slot is on screen. The film starts once a little of it shows, and goes to
+    // the corner once less than 30% is left above the top edge. Closing the corner player lasts until the slot is back.
+    function update(ratio, top) {
+      st.past = ratio < 0.3 && top < 0;
+      if (st.past) { if (self.playing() && !st.dismissed) { setMini(true); } return; }
+      st.dismissed = false;
+      setMini(false);
+      if (ratio >= 0.12) { self.autoStart(); }
+    }
+    self.onView = function (en) {
+      if (self.visible()) { update(en.isIntersecting ? en.intersectionRatio : 0, en.boundingClientRect.top); }
+    };
+    self.measure = function () {
+      var r = slot.getBoundingClientRect(), h = window.innerHeight || document.documentElement.clientHeight;
+      var shown = Math.max(0, Math.min(r.bottom, h) - Math.max(r.top, 0));
+      update(r.height > 0 ? shown / r.height : 0, r.top);
+    };
+    self.stop = function () { setMini(false); if (!v.paused) { v.pause(); } };
+    self.resumeAt = function (t, playing) { st.started = true; seekTo(t); if (playing) { play(true); } else { render(); } };
+
+    // Controls hide 2.5 s after the last pointer move while the film plays, and stay while a key moves focus inside.
+    function sleep(ms) {
+      clearTimeout(st.idle);
+      st.idle = setTimeout(function () {
+        if (!self.playing()) { return; }
+        var kb = false;
+        try { kb = !!p.querySelector(":focus-visible"); } catch (err) {}
+        if (!kb) { p.setAttribute("data-idle", ""); }
+      }, ms);
+    }
+    function wake() { p.removeAttribute("data-idle"); clearTimeout(st.idle); if (self.playing()) { sleep(2500); } }
+
+    v.addEventListener("play", function () { if (st.past && !st.dismissed) { setMini(true); } wake(); render(); });
+    v.addEventListener("pause", function () { wake(); render(); });
+    v.addEventListener("ended", function () { setMini(false); wake(); render(); });
+    v.addEventListener("loadedmetadata", function () { if (st.pendingSeek >= 0) { v.currentTime = st.pendingSeek; st.pendingSeek = -1; } render(); });
+    ["timeupdate", "volumechange", "durationchange", "seeked", "playing"].forEach(function (n) { v.addEventListener(n, render); });
+
+    bPlay.addEventListener("click", function () { toggle(); wake(); });
+    big.addEventListener("click", function () { play(true); wake(); });
+    bMute.addEventListener("click", function () { toggleMute(); wake(); });
+    hint.addEventListener("click", function () { if (st.policyMuted) { self.unmuteFromGesture(); } });
+    bClose.addEventListener("click", function () { st.dismissed = true; st.userPaused = true; v.pause(); setMini(false); });
+    volR.addEventListener("input", function () {
+      var x = Math.max(0, Math.min(100, Number(volR.value) || 0)) / 100;
+      if (x > 0) { vol = x; userMuted = false; st.policyMuted = false; applyVol(); } else { userMuted = true; }
+      v.muted = userMuted;
+      write(VOL_KEY, String(vol));
+      write(MUTE_KEY, userMuted ? "1" : "0");
+      render();
+      wake();
+    });
+    seek.addEventListener("input", function () { st.dragging = true; seekTo(seek.value / 1000 * dur()); wake(); });
+    seek.addEventListener("change", function () { st.dragging = false; render(); });
+    p.addEventListener("pointerdown", function (ev) { st.pointer = ev.pointerType || "mouse"; st.wasIdle = p.hasAttribute("data-idle"); wake(); });
+    p.addEventListener("pointermove", function (ev) { if (ev.pointerType !== "touch") { wake(); } });
+    p.addEventListener("pointerleave", function (ev) { if (ev.pointerType !== "touch" && self.playing()) { sleep(800); } });
+    p.addEventListener("focusin", wake);
+    p.addEventListener("focusout", wake);
+    v.addEventListener("click", function () {
+      if (Date.now() - st.unmutedAt < 800) { return; }
+      if (st.pointer === "touch" && st.wasIdle) { return; }
+      toggle();
+    });
+    p.addEventListener("keydown", function (ev) {
+      if (ev.altKey || ev.ctrlKey || ev.metaKey) { return; }
+      var k = ev.key, tg = ev.target, onSeek = tg === seek;
+      if (k === " " || k === "k" || k === "K") {
+        if (k === " " && tg.tagName === "BUTTON") { return; }
+        ev.preventDefault(); toggle(); wake(); return;
+      }
+      if (k === "m" || k === "M") { ev.preventDefault(); toggleMute(); wake(); return; }
+      if (tg === volR) { return; }
+      var step = { ArrowLeft: -5, ArrowRight: 5 }[k];
+      if (onSeek) { step = { ArrowLeft: -5, ArrowRight: 5, ArrowDown: -5, ArrowUp: 5, PageDown: -10, PageUp: 10 }[k]; }
+      if (onSeek && (k === "Home" || k === "End")) { ev.preventDefault(); seekTo(k === "Home" ? 0 : dur()); wake(); return; }
+      if (step) { ev.preventDefault(); seekTo(self.time() + step); wake(); }
+    });
+    render();
+  }
+
+  document.querySelectorAll(".player").forEach(function (p) { players.push(new Player(p)); });
+  var hasIO = "IntersectionObserver" in window;
+  if (hasIO) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { players.forEach(function (pl) { if (pl.slot === en.target) { pl.onView(en); } }); });
+    }, { threshold: [0, 0.12, 0.3] });
+    players.forEach(function (pl) { io.observe(pl.slot); });
+  }
+
+  function current() { for (var i = 0; i < players.length; i++) { if (players[i].visible()) { return players[i]; } } return null; }
+  function setLang(lang, user) {
+    var prev = current(), t = prev ? prev.time() : 0, wasPlaying = !!(prev && prev.playing()), wasStarted = !!(prev && prev.st.started);
+    document.querySelectorAll("[data-lang-block]").forEach(function (b) { b.hidden = b.getAttribute("data-lang-block") !== lang; });
+    players.forEach(function (pl) { if (!pl.visible()) { pl.stop(); } });
+    var cur = current();
+    // Both films share one timeline, so a language switch carries on from the same moment.
+    if (cur && user && prev && prev !== cur && wasStarted) { cur.resumeAt(t, wasPlaying); }
+    if (cur) { if (hasIO) { cur.measure(); } else { cur.autoStart(); } }
+    document.documentElement.lang = lang;
+    document.title = META[lang].title;
+    var d = document.querySelector('meta[name="description"]');
+    if (d) { d.setAttribute("content", META[lang].description); }
+    if (user) { write(LANG_KEY, lang); }
+  }
+
+  document.addEventListener("click", function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest("[data-set-lang]") : null;
+    if (b) { setLang(b.getAttribute("data-set-lang"), true); }
+  });
+
+  var lang = read(LANG_KEY);
+  if (lang !== "ko" && lang !== "en") {
+    lang = String(navigator.language || "").toLowerCase().indexOf("ko") === 0 ? "ko" : "en";
+  }
+  setLang(lang, false);
+})();
+</script>
+</body>
+</html>
