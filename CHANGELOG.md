@@ -2,6 +2,7 @@
 
 ## 2.0 (2026-10-23)
 
+- Stop pills reserve the native rounded button’s click area on macOS 14 and 15 without enlarging their drawing, where the window or screen has room.
 - Shutdown restores the original notice before a nonblocking geometry save; busy saves retry while the helper runs.
 - The Stop capsule keeps a fold dot when the window dot is hidden and closes before a display change repositions its anchor.
 - The inline Stop gate also covers the delayed release of a rejected press.

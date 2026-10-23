@@ -959,6 +959,27 @@ static NSSize StopPillSize(NSString *title,NSFont *font) {
     CGFloat text=ceil([title?:@"" sizeWithAttributes:@{NSFontAttributeName:font}].width);
     return NSMakeSize(text+2*CRDPillPaddingX,StopPillLineHeight(font)+2*CRDPillPaddingY);
 }
+static NSValue *fixtureNativeStopSize;
+// The native rounded button's whole frame is trackable, including its alignment padding.
+// Measure with the system font used by the native control, and cache by title and font.
+static NSSize NativeStopButtonSize(NSString *title,NSFont *font) {
+    if(fixtureMode&&fixtureNativeStopSize) return fixtureNativeStopSize.sizeValue;
+    static NSCache *sizes; static dispatch_once_t once;
+    dispatch_once(&once,^{ sizes=[NSCache new]; sizes.countLimit=32; });
+    NSArray *key=@[title?:@"",font]; NSValue *cached=[sizes objectForKey:key];
+    if(cached) return cached.sizeValue;
+    NSButton *native=[NSButton buttonWithTitle:title?:@"" target:nil action:nil];
+    native.bezelStyle=NSBezelStyleRounded; native.font=font; [native sizeToFit];
+    [sizes setObject:[NSValue valueWithSize:native.frame.size] forKey:key];
+    return native.frame.size;
+}
+// Grow only the press area. A saved window too short or narrow for the native target keeps
+// the pill's existing compact minimum; it cannot grow the window or displace its other controls.
+static NSSize StopPillHitSize(NSSize pill,NSSize native,NSSize available) {
+    return NSMakeSize(MAX(pill.width,native.width<=available.width?native.width:0),
+                      MAX(pill.height,native.height<=available.height?native.height:0));
+}
+static void SetStopPillDrawingSize(NSButton *button,NSSize size);
 // The lowest pill that still shows its text: 2 pt above and below the line.
 static CGFloat StopPillMinimumHeight(NSFont *font) { return StopPillLineHeight(font)+2*CRDPillMinimumPaddingY; }
 // The narrowest pill that keeps its whole title: 10 pt at each side.
@@ -1064,9 +1085,11 @@ static void Layout(CRDWindowState *s) {
     StyleStopPill(s.stop,ConfiguredText(d[@"buttonText"],@"buttonText",@"공유 중지"),font,d[@"stopStyle"]);
     // The pill's natural size, at least 36 x 24 pt. A short window lowers it to its minimum height.
     NSSize pill=StopPillSize(s.stop.title,s.stop.font);
+    NSSize native=NativeStopButtonSize(s.stop.title,[NSFont systemFontOfSize:font]);
     CGFloat buttonW=MAX(36,pill.width), buttonH=MAX(24,pill.height), minimumButtonH=MAX(24,StopPillMinimumHeight(s.stop.font));
     s.label.hidden=s.dot.hidden=s.stop.hidden=YES;
     s.label.frame=s.dot.frame=s.stop.frame=NSZeroRect;
+    SetStopPillDrawingSize(s.stop,NSZeroSize);
     NSString *layout=d[@"layout"];
     if ([layout isEqual:@"dot"]) {
         if ([d[@"showDot"] boolValue] && w>0 && h>0) {
@@ -1081,7 +1104,9 @@ static void Layout(CRDWindowState *s) {
         buttonH=MAX(minimumButtonH,MIN(buttonH,h-2*pad));
         if ([d[@"showStopButton"] boolValue] && inner>=36 && h>=buttonH+2*pad) {
             s.stop.hidden=NO; buttonW=MIN(buttonW,inner);
-            s.stop.frame=NSMakeRect(centerX-buttonW/2,pad,buttonW,buttonH);
+            NSSize hit=StopPillHitSize(NSMakeSize(buttonW,buttonH),native,NSMakeSize(inner,h-2*pad));
+            s.stop.frame=NSMakeRect(centerX-hit.width/2,pad,hit.width,hit.height);
+            SetStopPillDrawingSize(s.stop,NSMakeSize(buttonW,buttonH));
         }
         CGFloat floor=s.stop.hidden?pad:NSMaxY(s.stop.frame)+gap;
         if ([d[@"showDot"] boolValue] && inner>=dotWidth && top-floor>=line) {
@@ -1096,14 +1121,19 @@ static void Layout(CRDWindowState *s) {
         CGFloat left=pad+handleLeft,right=w-pad-handleRight;
         CGFloat availableHeight=h-handleTop;
         buttonH=MAX(minimumButtonH,MIN(buttonH,availableHeight));
+        CGFloat hitHeight=StopPillHitSize(NSMakeSize(buttonW,buttonH),native,NSMakeSize(0,availableHeight)).height;
         // The stop button stays clear of the grip when their heights overlap.
-        if (!s.resizeHandle.hidden && (availableHeight-buttonH)/2<NSMaxY(s.resizeHandle.frame)+1)
+        if (!s.resizeHandle.hidden && (availableHeight-hitHeight)/2<NSMaxY(s.resizeHandle.frame)+1)
             right=MIN(right,NSMinX(s.resizeHandle.frame)-2);
         if ([d[@"showStopButton"] boolValue] && availableHeight>=buttonH && right-left>=36) {
             // A tight row narrows the pill's side padding before it gives up the dot beside it.
             if ([d[@"showDot"] boolValue] && availableHeight>=line) buttonW=MIN(buttonW,MAX(StopPillCompactWidth(s.stop.title,s.stop.font),right-left-dotWidth-gap));
             buttonW=MIN(buttonW,right-left); s.stop.hidden=NO;
-            s.stop.frame=NSMakeRect(right-buttonW,(availableHeight-buttonH)/2,buttonW,buttonH); right-=buttonW+gap;
+            CGFloat hitWidthAvailable=right-left;
+            if([d[@"showDot"] boolValue]&&availableHeight>=line&&right-left-buttonW>=dotWidth+gap) hitWidthAvailable-=dotWidth+gap;
+            NSSize hit=StopPillHitSize(NSMakeSize(buttonW,buttonH),native,NSMakeSize(hitWidthAvailable,availableHeight));
+            s.stop.frame=NSMakeRect(right-hit.width,(availableHeight-hit.height)/2,hit.width,hit.height); right-=hit.width+gap;
+            SetStopPillDrawingSize(s.stop,NSMakeSize(buttonW,buttonH));
         }
         if ([d[@"showDot"] boolValue] && availableHeight>=line && right-left>=dotWidth) {
             s.dot.hidden=NO; s.dot.alignment=NSTextAlignmentCenter;
@@ -1326,7 +1356,7 @@ static NSTextField *OverlayLabel(NSString *text) {
 @property BOOL rejectingPress;
 @property CRDStopGestureGate *stopGestureGate;
 @property(copy) NSMenu *(^contextMenuProvider)(void);
-/// The drawn pill inside a larger press area (the capsule's Stop), in the button's coordinates. The
+/// The drawn pill inside native button padding or the capsule's press area, in button coordinates. The
 /// frame, and so every press rule, covers the whole press area. Zero draws the pill over the whole frame.
 @property NSRect pillFrame;
 /// The stopStyle setting the pill is drawn in: "red" or "gray".
@@ -1382,6 +1412,11 @@ static NSTextField *OverlayLabel(NSString *text) {
 }
 @end
 
+// Keep the visible pill centered when native button padding requires a larger hit frame.
+static void SetStopPillDrawingSize(NSButton *button,NSSize size) {
+    ((CRDSessionStopButton *)button).pillFrame=NSMakeRect((NSWidth(button.bounds)-size.width)/2,
+        (NSHeight(button.bounds)-size.height)/2,size.width,size.height);
+}
 static void StyleStopPill(NSButton *button,NSString *title,CGFloat size,NSString *style) {
     button.bordered=NO; button.hasDestructiveAction=YES; button.contentTintColor=nil;
     button.title=title?:@""; button.font=StopPillFont(size);
@@ -1428,7 +1463,8 @@ static void StyleStopPill(NSButton *button,NSString *title,CGFloat size,NSString
 // Its Stop metrics are independent of the saved font; a visible dot-layout dot keeps its diameter.
 // ExpandedStopCapsule in the settings app draws the same layout.
 static const CGFloat CRDCapsulePadding=6,CRDCapsuleDotInset=12,CRDCapsuleDotGap=10,CRDCapsuleDotDiameter=12;
-// The capsule's Stop press area is at least 120 x 36 pt; a pill wider than the maximum truncates its label.
+// The capsule's Stop press area is at least 120 x 36 pt and the native button frame when it fits.
+// A pill wider than the maximum truncates its label.
 static const CGFloat CRDStopHitWidth=120,CRDStopHitHeight=36,CRDCapsulePillMaximumWidth=280;
 static const CGFloat CRDStopShrinkMargin=6; // A double-click this close to Stop does nothing.
 static const CGFloat CRDStopTextPadding=12; // Text padding of the native Stop menu.
@@ -1440,7 +1476,7 @@ struct CRDCapsuleLayout { NSSize size; NSRect dot,pill,press; };
 // sits 12 pt from the left end and 10 pt before the pill, leaving room to fold outside Stop.
 // The press area is the pill, the capsule's padding around it and half the gap, and the pill widens
 // so that the press area is at least 120 x 36 pt.
-static CRDCapsuleLayout CapsuleLayout(NSSize pill,CGFloat dotDiameter) {
+static CRDCapsuleLayout CapsuleLayout(NSSize pill,CGFloat dotDiameter,NSSize native=NSZeroSize) {
     CRDCapsuleLayout layout={};
     CGFloat dot=dotDiameter>0?dotDiameter:CRDCapsuleDotDiameter;
     CGFloat height=MAX(pill.height,dot)+2*CRDCapsulePadding,inset=round((height-pill.height)/2);
@@ -1451,17 +1487,32 @@ static CRDCapsuleLayout CapsuleLayout(NSSize pill,CGFloat dotDiameter) {
     layout.pill=NSMakeRect(pillX,inset,pillWidth,pill.height);
     layout.press=NSMakeRect(pressX,0,layout.size.width-pressX,height);
     layout.dot=NSMakeRect(CRDCapsuleDotInset,(height-dot)/2,dot,dot);
+    // Preserve the natural capsule drawing; additional native padding belongs to the hit area.
+    if(native.width>layout.press.size.width) {
+        layout.size.width+=native.width-layout.press.size.width; layout.press.size.width=native.width;
+        layout.pill.origin.x=NSMinX(layout.press)+(native.width-layout.pill.size.width)/2;
+    }
+    if(native.height>layout.press.size.height) {
+        layout.size.height=layout.press.size.height=native.height;
+        layout.pill.origin.y=(native.height-layout.pill.size.height)/2; layout.dot.origin.y=(native.height-dot)/2;
+    }
     return layout;
 }
 // Fits unusually large dots or labels on a small display without substituting a menu. First
 // shorten the label and reduce the dot, retaining the 120 pt Stop target where space permits.
 // A display smaller than the minimum capsule scales the entire layout to its available size.
-static CRDCapsuleLayout CapsuleLayoutOnScreen(NSSize pill,CGFloat dotDiameter,NSSize available) {
-    CRDCapsuleLayout layout=CapsuleLayout(pill,dotDiameter);
+static CRDCapsuleLayout CapsuleLayoutOnScreen(NSSize pill,CGFloat dotDiameter,NSSize available,NSSize native=NSZeroSize) {
+    // A display smaller than the native target plus a fold dot uses the existing small-screen
+    // capsule rules. Never sacrifice the fold target or put any of the capsule off-screen.
+    CGFloat foldWidth=CRDCapsuleDotInset+MIN(dotDiameter>0?dotDiameter:CRDCapsuleDotDiameter,CRDCapsuleDotDiameter)+CRDCapsuleDotGap/2;
+    if(native.width+foldWidth>available.width) native.width=0;
+    if(native.height>available.height) native.height=0;
+    CGFloat minimumHitWidth=MAX(CRDStopHitWidth,native.width);
+    CRDCapsuleLayout layout=CapsuleLayout(pill,dotDiameter,native);
     if(layout.size.width<=available.width&&layout.size.height<=available.height) return layout;
-    CGFloat dot=MIN(dotDiameter,MAX(MIN(dotDiameter,CRDCapsuleDotDiameter),MIN(available.height-2*CRDCapsulePadding,available.width-CRDStopHitWidth-CRDCapsuleDotInset-CRDCapsuleDotGap/2)));
-    layout=CapsuleLayout(pill,dot);
-    CGFloat trim=MIN(MAX(0,layout.size.width-available.width),layout.press.size.width-CRDStopHitWidth);
+    CGFloat dot=MIN(dotDiameter,MAX(MIN(dotDiameter,CRDCapsuleDotDiameter),MIN(available.height-2*CRDCapsulePadding,available.width-minimumHitWidth-CRDCapsuleDotInset-CRDCapsuleDotGap/2)));
+    layout=CapsuleLayout(pill,dot,native);
+    CGFloat trim=MIN(MAX(0,layout.size.width-available.width),layout.press.size.width-minimumHitWidth);
     layout.pill.size.width-=trim; layout.press.size.width-=trim; layout.size.width-=trim;
     CGFloat scale=MIN(1,MIN(available.width/layout.size.width,available.height/layout.size.height));
     if(scale<1) {
@@ -1483,6 +1534,7 @@ static NSRect CapsuleFrame(NSRect anchor,NSRect visible,NSSize size,BOOL *fits) 
 }
 static NSNumber *fixtureReduceMotion;
 static NSValue *fixtureRevealVisibleFrame;
+static NSUInteger fixtureOpenedRevealGeneration;
 // False when Reduce Motion is on (or a fixture says so).
 static BOOL RevealAnimationsEnabled(void) { return !(fixtureMode&&fixtureReduceMotion?fixtureReduceMotion.boolValue:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion); }
 // True when two Stop tokens name the same process, window generation, window and Stop element.
@@ -2178,7 +2230,7 @@ static void ReconcileFromConfig(BOOL needsAX) {
     CGFloat diameter=dotLayout&&!overlay.dot.hidden?MIN(overlay.dot.dotDiameter,MIN(anchor.size.width,anchor.size.height)):CRDCapsuleDotDiameter;
     NSSize pill=StopPillSize(title,button.font);
     NSSize available=NSMakeSize(floor(NSMaxX(visible))-ceil(NSMinX(visible)),floor(NSMaxY(visible))-ceil(NSMinY(visible)));
-    CRDCapsuleLayout layout=CapsuleLayoutOnScreen(pill,diameter,available);
+    CRDCapsuleLayout layout=CapsuleLayoutOnScreen(pill,diameter,available,NativeStopButtonSize(title,[NSFont systemFontOfSize:NSFont.systemFontSize]));
     if(layout.pill.size.height<pill.height) button.font=[NSFont systemFontOfSize:button.font.pointSize*layout.pill.size.height/pill.height];
     NSRect frame=CapsuleFrame(anchor,visible,layout.size,nullptr);
     self.revealToken=token;
@@ -2249,6 +2301,7 @@ static void ReconcileFromConfig(BOOL needsAX) {
             dispatch_source_set_event_handler(timer,^{ [weakSelf closeStopReveal:@"timeout"]; }); dispatch_resume(timer);
         }
         WriteRuntimeStatus(@"stop-reveal-opened",nil);
+        if(fixtureMode) fixtureOpenedRevealGeneration=generation;
     };
     if(animate) [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context){
         context.duration=CRDRevealOpenDuration; [[button animator] setAlphaValue:1];
@@ -2814,14 +2867,16 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     BOOL neverResizable=!(panelWindow.styleMask&NSWindowStyleMaskResizable)&&!panelWindow.movable&&!panelWindow.movableByWindowBackground&&overlay.resizeHandle.hidden;
     // Tiling, Stage Manager or a screen change; the configured frame comes back, unsaved.
     InvalidateGeometry(); NSString *beforeSystemResize=FileSignature(); NSUInteger reverts=systemResizeReverts; NSRect configuredFrame=panelWindow.frame;
-    [panelWindow setFrame:NSMakeRect(NSMinX(visible),NSMinY(visible),NSWidth(visible)/2,NSHeight(visible)) display:NO]; RunFor(.25);
+    [panelWindow setFrame:NSMakeRect(NSMinX(visible),NSMinY(visible),NSWidth(visible)/2,NSHeight(visible)) display:NO];
+    RunUntil(2,^BOOL{ return !systemResizeRevertPending&&NSEqualRects(panelWindow.frame,configuredFrame); });
     check(@"system_resize_is_reverted_and_never_saved",systemResizeReverts==reverts+1&&NSEqualRects(panelWindow.frame,configuredFrame)&&!geometryDirty&&
         ((!beforeSystemResize&&!FileSignature())||[FileSignature() isEqual:beforeSystemResize]));
     // A burst of separately delivered resizes (more than 4 in a second) ends at the configured frame.
     systemResizeWindowStart=0; systemResizeWindowCount=0; reverts=systemResizeReverts;
     for(int burst=0;burst<6;burst++) { [panelWindow setFrame:NSMakeRect(NSMinX(visible),NSMinY(visible),300+burst*4,300) display:NO]; RunFor(.02); }
     BOOL trailingPending=systemResizeRevertPending&&!NSEqualRects(panelWindow.frame,configuredFrame);
-    RunFor(1.3); NSUInteger settledReverts=systemResizeReverts; RunFor(.3);
+    RunUntil(3,^BOOL{ return !systemResizeRevertPending&&NSEqualRects(panelWindow.frame,configuredFrame); });
+    NSUInteger settledReverts=systemResizeReverts; RunFor(.3);
     check(@"system_resize_burst_keeps_one_trailing_correction_and_then_stops",trailingPending&&NSEqualRects(panelWindow.frame,configuredFrame)&&!systemResizeRevertPending&&
         settledReverts==reverts+5&&systemResizeReverts==settledReverts&&!geometryDirty&&((!beforeSystemResize&&!FileSignature())||[FileSignature() isEqual:beforeSystemResize]));
     previewMode=YES; overlay.shown=wasShown; [trackingQueue removeAllObjects];
@@ -2861,7 +2916,8 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSDictionary *merged=UpdateConfig(^(NSMutableDictionary *value){ value[@"height"]=@62; });
     check(@"config_patch_keeps_other_writer_fields",[merged[@"x"] isEqual:@123]&&[merged[@"height"] isEqual:@62]);
     CRDReload();
-    RunFor(.2); NSUInteger reads=configReadCount,reconciles=coordinator.reconcileCount; RunFor(1.1);
+    RunUntil(2,^BOOL{ return !reloadPending&&!coordinator.pending; });
+    NSUInteger reads=configReadCount,reconciles=coordinator.reconcileCount; RunFor(1.1);
     check(@"idle_has_no_config_reads",configReadCount==reads); check(@"fixture_never_reconciles_original",coordinator.reconcileCount==0&&reconciles==0&&coordinator.original==nil);
     WriteRuntimeStatus(@"self-test",nil);
     NSData *statusData=[NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"runtime-status.json"]];
@@ -2898,7 +2954,8 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     check(@"logger_private_file_and_directory_modes",(fileMode.unsignedIntegerValue&0777)==0600&&(dirMode.unsignedIntegerValue&0777)==0700);
     CRDEventLog *expiryLog=[[CRDEventLog alloc] initWithPath:[dir stringByAppendingPathComponent:@"expiry/events.jsonl"]];
     NSMutableArray *expiring=[@[@{@"event":@"expiring",@"timestampSeconds":@(NSDate.date.timeIntervalSince1970-CRDLogRetention+.15)}] mutableCopy];
-    [expiryLog write:[expiryLog boundedData:expiring]]; [expiryLog maintain]; RunFor(.35);
+    [expiryLog write:[expiryLog boundedData:expiring]]; [expiryLog maintain];
+    RunUntil(2,^BOOL{ return expiryLog.maintenanceCount>=2; });
     check(@"logger_one_shot_expiry_removes_record",[expiryLog readRecords].count==0&&expiryLog.expiryTimer==nil&&expiryLog.maintenanceCount==2);
     NSDictionary *snapshot=SettingsSnapshot(); check(@"log_settings_allowlist_excludes_custom_text",!snapshot[@"text"]&&!snapshot[@"buttonText"]&&snapshot[@"width"]&&snapshot[@"layout"]);
     log=nil; expiryLog=nil; disabledLog=nil;
@@ -3051,12 +3108,8 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSDictionary *tokenB=@{@"pid":@100,@"generation":@2,@"window":@"fixture-window-b",@"stop":@"fixture-stop-b"};
     check(@"stop_token_rejects_recreated_window_and_pid",SameStopToken(tokenA,[tokenA copy])&&!SameStopToken(tokenA,tokenB)&&!SameStopToken(tokenA,@{@"pid":@101,@"generation":@1,@"window":@"fixture-window-a",@"stop":@"fixture-stop-a"})&&!SameStopToken(tokenA,nil));
     NSMutableDictionary *reveal=[CRDDefaults() mutableCopy]; reveal[@"mode"]=@"custom"; reveal[@"layout"]=@"dot"; reveal[@"width"]=@40; reveal[@"height"]=@40; reveal[@"stopRevealSeconds"]=@1; apply(reveal);
-    // Waits for the capsule's opening to finish: its fold timer starts then (stopRevealSeconds above 0),
-    // or it did not open. With no fold timer there is no such signal, so it waits a fixed .3 s.
-    auto waitForOpen=[&]{
-        if([currentConfig[@"stopRevealSeconds"] doubleValue]>0) RunUntil(5,^BOOL{ return !coordinator.stopRevealPanel||coordinator.revealTimer!=nil; });
-        else RunFor(.3);
-    };
+    // The completion signal also covers manual folding, where no timer is installed.
+    auto waitForOpen=[&]{ RunUntil(5,^BOOL{ return !coordinator.stopRevealPanel||fixtureOpenedRevealGeneration==coordinator.revealGeneration; }); };
     // Waits for the capsule to close, its closing animation included.
     auto waitForClose=[&]{ RunUntil(5,^BOOL{ return !coordinator.stopRevealPanel; }); };
     __block NSUInteger revealRequests=0; overlay.dot.doubleClickAction=^(NSEvent *event){ revealRequests++; };
@@ -3143,9 +3196,13 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     check(@"auto_shrink_range_allows_zero_and_matches_schema",Validate(@{@"stopRevealSeconds":@0},nil)!=nil&&Validate(@{@"stopRevealSeconds":@30},nil)!=nil&&Validate(@{@"stopRevealSeconds":@(-1)},nil)==nil&&Validate(@{@"stopRevealSeconds":@31},nil)==nil&&
         [Schema()[@"numericLimits"][@"stopRevealSeconds"] isEqual:(@[@0,@30])]&&[CRDDefaults()[@"stopRevealSeconds"] isEqual:@5]);
     NSMutableDictionary *stayOpen=[reveal mutableCopy]; stayOpen[@"stopRevealSeconds"]=@0; apply(stayOpen);
-    [coordinator presentStopRevealWithToken:tokenA]; RunFor(1.3);
+    fixtureReduceMotion=@NO;
+    [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
+    check(@"manual_capsule_wait_observes_open_completion_without_a_timer",coordinator.stopRevealPanel&&
+        fixtureOpenedRevealGeneration==coordinator.revealGeneration&&coordinator.revealTimer==nil);
+    RunFor(1.3);
     check(@"auto_shrink_off_keeps_capsule_open_until_shrunk",coordinator.stopRevealPanel!=nil&&coordinator.revealTimer==nil&&overlay.customView.suppressBackground);
-    [coordinator closeStopReveal:@"fixture"]; apply(reveal);
+    [coordinator closeStopReveal:@"fixture"]; fixtureReduceMotion=nil; apply(reveal);
     NSMenu *context=[overlay.dot menuForEvent:rightClick];
     check(@"dot_context_menu_is_window_menu_with_safe_stop_action",context.numberOfItems==8&&[context itemAtIndex:7].action==@selector(stopSharingClicked:)&&![context itemAtIndex:7].enabled&&[context itemAtIndex:1].action==@selector(togglePositionLock:));
     fixtureLanguage=@"en";
@@ -3239,7 +3296,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         fixtureRevealVisibleFrame=nil; fixtureReduceMotion=nil; fixtureStopToken=nil; apply(settingsBefore);
     }
     [overlay.controller.window setFrame:mainBefore display:YES];
-    [coordinator presentStopRevealWithToken:tokenA]; RunFor(.3);
+    [coordinator presentStopRevealWithToken:tokenA]; waitForOpen();
     [coordinator validateStopRevealForToken:tokenA modeSignature:@"different-mode" windowDetected:YES];
     check(@"stop_reveal_closes_on_mode_change",coordinator.stopRevealPanel==nil);
     [coordinator presentStopRevealWithToken:tokenA]; waitForOpen(); waitForClose();
@@ -3392,7 +3449,7 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         [coordinator closeStopReveal:@"user-collapsed"];
         BOOL acceptsReopen=closing.ignoresMouseEvents&&!overlay.controller.window.ignoresMouseEvents;
         if(acceptsReopen) press(overlay.dot,NSMakePoint(2,2),@[],2);
-        NSPanel *reopened=coordinator.stopRevealPanel; RunFor(.3);
+        NSPanel *reopened=coordinator.stopRevealPanel; waitForOpen();
         check(@"double_click_during_close_reopens_without_a_stale_completion",acceptsReopen&&reopened!=closing&&coordinator.stopRevealPanel==reopened&&coordinator.revealStopButton.stopGestureGate!=nil);
         [coordinator closeStopReveal:@"fixture"]; fixtureReduceMotion=@YES;
         // Missing Stop is a disabled capsule, not a lost double-click. A new target closes it,
@@ -3552,7 +3609,9 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
             // The pill draws its red in both looks; the accent colors only the dot and the border.
             overlay.stop.enabled=YES;
             NSBitmapImageRep *raster=[overlay.stop bitmapImageRepForCachingDisplayInRect:overlay.stop.bounds]; [overlay.stop cacheDisplayInRect:overlay.stop.bounds toBitmapImageRep:raster];
-            NSColor *edge=[[raster colorAtX:(NSInteger)(raster.pixelsWide*.08) y:raster.pixelsHigh/2] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+            NSRect drawn=[(CRDSessionStopButton *)overlay.stop pillRect];
+            NSInteger sampleX=(NSInteger)((NSMinX(drawn)+NSWidth(drawn)*.08)*raster.pixelsWide/NSWidth(overlay.stop.bounds));
+            NSColor *edge=[[raster colorAtX:sampleX y:raster.pixelsHigh/2] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
             // The cache bitmap uses the display's color space, so the sample is compared with the
             // first look and checked for a red hue rather than for the exact sRGB value.
             if(!firstEdge) firstEdge=edge;
@@ -3562,6 +3621,57 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         }
         fixtureLanguage=nil;
         check(@"inline_stop_pill_press_area_is_at_least_the_native_button",atLeastNative);
+        BOOL capsuleAtLeastNative=YES,inlineGrowth=YES,capsuleGrowth=YES,foldSpace=YES;
+        NSNumber *savedMotion=fixtureReduceMotion; fixtureReduceMotion=@YES;
+        for(NSString *language in @[@"ko",@"en"]) {
+            fixtureLanguage=language; apply(bar);
+            NSSize native=NativeStopButtonSize(overlay.stop.title,[NSFont systemFontOfSize:NSFont.systemFontSize]);
+            [coordinator presentStopRevealWithToken:tokenA];
+            NSRect capsuleHit=coordinator.revealStopButton.frame;
+            if(NSWidth(capsuleHit)<native.width||NSHeight(capsuleHit)<native.height) capsuleAtLeastNative=NO;
+            NSSize naturalCapsulePill=[coordinator.revealStopButton pillRect].size;
+            [coordinator closeStopReveal:@"fixture"];
+            // Model the native bezel padding of systems whose button exceeds the drawn pill.
+            NSSize forced=NSMakeSize(180,46); fixtureNativeStopSize=[NSValue valueWithSize:forced];
+            for(NSString *layout in @[@"row",@"column"]) {
+                NSMutableDictionary *roomy=[bar mutableCopy]; roomy[@"layout"]=layout; roomy[@"height"]=@120; apply(roomy);
+                NSRect hit=overlay.stop.bounds,drawn=[(CRDSessionStopButton *)overlay.stop pillRect];
+                NSSize natural=StopPillSize(overlay.stop.title,overlay.stop.font);
+                if(overlay.stop.hidden||!NSEqualSizes(hit.size,forced)||!NSEqualSizes(drawn.size,natural)||
+                   NSMidX(drawn)!=NSMidX(hit)||NSMidY(drawn)!=NSMidY(hit)) inlineGrowth=NO;
+            }
+            apply(bar); [coordinator presentStopRevealWithToken:tokenA];
+            NSRect hit=coordinator.revealStopButton.bounds,drawn=[coordinator.revealStopButton pillRect];
+            if(!NSEqualSizes(hit.size,forced)||!NSEqualSizes(drawn.size,naturalCapsulePill)||
+               NSMidX(drawn)!=NSMidX(hit)||NSMidY(drawn)!=NSMidY(hit)) capsuleGrowth=NO;
+            NSRect fold=coordinator.revealDot.frame;
+            if(!NSContainsRect(coordinator.stopRevealPanel.contentView.bounds,fold)||
+               NSPointInRect(NSMakePoint(NSMidX(fold),NSMidY(fold)),NSInsetRect(coordinator.revealStopButton.frame,-CRDStopShrinkMargin,-CRDStopShrinkMargin))) foldSpace=NO;
+            [coordinator closeStopReveal:@"fixture"];
+            fixtureRevealVisibleFrame=[NSValue valueWithRect:NSMakeRect(0,0,220,60)];
+            [coordinator presentStopRevealWithToken:tokenA];
+            if(!NSEqualSizes(coordinator.revealStopButton.frame.size,forced)||
+               !NSContainsRect(fixtureRevealVisibleFrame.rectValue,coordinator.stopRevealPanel.frame)) foldSpace=NO;
+            [coordinator closeStopReveal:@"fixture"]; fixtureRevealVisibleFrame=nil; fixtureNativeStopSize=nil;
+        }
+        check(@"capsule_stop_pill_press_area_is_at_least_the_native_button",capsuleAtLeastNative);
+        check(@"inline_native_minimum_grows_hit_frame_and_keeps_natural_pill_centered",inlineGrowth);
+        check(@"capsule_native_minimum_grows_hit_frame_and_keeps_natural_pill_centered",capsuleGrowth);
+        check(@"larger_native_stop_keeps_fold_dot_and_fits_small_screen",foldSpace);
+        // A short bar, or a compact row with a dot and grips, cannot fit the native target.
+        // Retain their established pill minimums rather than resize the saved window or hide the dot.
+        fixtureLanguage=@"en"; fixtureNativeStopSize=[NSValue valueWithSize:NSMakeSize(180,46)];
+        NSMutableDictionary *constrained=[bar mutableCopy]; constrained[@"height"]=@26; apply(constrained);
+        BOOL shortNative=!overlay.stop.hidden&&NSHeight(overlay.stop.frame)==26;
+        for(NSDictionary *shape in Schema()[@"shapes"]) if([shape[@"id"] isEqual:@"compact"]) [constrained addEntriesFromDictionary:shape[@"values"]];
+        apply(constrained);
+        BOOL compactNative=!overlay.stop.hidden&&!overlay.dot.hidden&&NSHeight(overlay.stop.frame)==30&&
+            NSWidth(overlay.stop.frame)<180&&!NSIntersectsRect(overlay.dot.frame,overlay.stop.frame);
+        NSSize tiny=NSMakeSize(120,30);
+        CRDCapsuleLayout tinyCapsule=CapsuleLayoutOnScreen(NSMakeSize(81,30),12,tiny,NSMakeSize(180,46));
+        check(@"unfittable_native_target_keeps_compact_pill_and_small_screen_rules",shortNative&&compactNative&&
+            tinyCapsule.size.width<=tiny.width&&tinyCapsule.size.height<=tiny.height&&NSWidth(tinyCapsule.dot)>0);
+        fixtureNativeStopSize=nil; fixtureReduceMotion=savedMotion; fixtureLanguage=nil;
         // Every built-in shape keeps its dot, its caption and its Stop pill, in both languages.
         BOOL shapesKeepControls=YES;
         for(NSString *language in @[@"ko",@"en"]) for(NSDictionary *shape in Schema()[@"shapes"]) {
@@ -3584,7 +3694,9 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         for(NSString *look in @[@"light",@"dark"]) {
             NSMutableDictionary *grayBar=[bar mutableCopy]; grayBar[@"appearance"]=look; grayBar[@"stopStyle"]=@"gray"; apply(grayBar); overlay.stop.enabled=YES;
             NSBitmapImageRep *raster=[overlay.stop bitmapImageRepForCachingDisplayInRect:overlay.stop.bounds]; [overlay.stop cacheDisplayInRect:overlay.stop.bounds toBitmapImageRep:raster];
-            NSColor *edge=[[raster colorAtX:(NSInteger)(raster.pixelsWide*.08) y:raster.pixelsHigh/2] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+            NSRect drawn=[(CRDSessionStopButton *)overlay.stop pillRect];
+            NSInteger sampleX=(NSInteger)((NSMinX(drawn)+NSWidth(drawn)*.08)*raster.pixelsWide/NSWidth(overlay.stop.bounds));
+            NSColor *edge=[[raster colorAtX:sampleX y:raster.pixelsHigh/2] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
             if(fabs(edge.redComponent-edge.greenComponent)>.05||fabs(edge.greenComponent-edge.blueComponent)>.05) grayRaster=NO;
             if([look isEqual:@"light"]) lightGray=edge; else darkGray=edge;
             overlay.stop.enabled=NO;
@@ -3909,13 +4021,14 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     [coordinator releaseOriginal];
     __block NSUInteger setups=0;
     fixtureObserverSetup=^AXError{ return ++setups==1?kAXErrorCannotComplete:kAXErrorSuccess; };
-    [coordinator bindOriginal:(id)fakeApp]; RunFor(.4);
+    [coordinator bindOriginal:(id)fakeApp]; RunUntil(2,^BOOL{ return coordinator.observerReady; });
     check(@"transient_observer_failure_recovers_once_without_polling",coordinator.observerReady&&setups==2);
     NSUInteger setupCount=setups; RunFor(.3);
     check(@"observer_success_cancels_retry_work",setups==setupCount);
     [coordinator releaseOriginal]; setups=0;
     fixtureObserverSetup=^AXError{ setups++; return kAXErrorCannotComplete; };
-    [coordinator bindOriginal:(id)fakeApp]; RunFor(2.0); setupCount=setups; RunFor(.3);
+    [coordinator bindOriginal:(id)fakeApp]; RunUntil(5,^BOOL{ return setups>=4&&!coordinator.observerRetryPending; });
+    setupCount=setups; RunFor(.3);
     check(@"observer_retries_are_bounded",setups==4&&setupCount==4&&!coordinator.observerReady);
     SetOriginalHidden(coordinator,YES);
     fixtureJournalWrite=^BOOL(NSDictionary *intent){ return NO; };
@@ -3941,11 +4054,12 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     check(@"permission_line_follows_macos_27_pane_name",[PermissionRequiredKey(YES) isEqual:@"기기 제어 권한 필요"]&&[PermissionRequiredKey(NO) isEqual:@"손쉬운 사용 권한 필요"]&&
         LocalizationCatalog()[@"en"][PermissionRequiredKey(YES)]!=nil&&LocalizationCatalog()[@"en"][PermissionRequiredKey(NO)]!=nil&&
         UsesDeviceControlName()==(NSProcessInfo.processInfo.operatingSystemVersion.majorVersion>=27));
-    RunFor(.12);
+    BOOL refreshWasIdle=RunUntil(2,^BOOL{ return !coordinator.pending; });
     fixtureTrusted=@YES; refreshes=0;
-    [coordinator requestReconcile]; [coordinator requestReconcile]; [coordinator requestReconcile]; RunFor(.12);
+    [coordinator requestReconcile]; [coordinator requestReconcile]; [coordinator requestReconcile];
+    RunUntil(2,^BOOL{ return acknowledged!=0; });
     NSDictionary *refreshedStatus=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"runtime-status.json"]] options:0 error:nil];
-    check(@"explicit_status_requests_coalesce_and_acknowledge_after_status_write",refreshes==1&&acknowledged==1&&[refreshedStatus[@"accessibility"] isEqual:@YES]&&!coordinator.refreshRequested);
+    check(@"explicit_status_requests_coalesce_and_acknowledge_after_status_write",refreshWasIdle&&refreshes==1&&acknowledged==1&&[refreshedStatus[@"accessibility"] isEqual:@YES]&&!coordinator.refreshRequested);
     RunFor(.12);
     check(@"trust_refresh_has_no_idle_polling",refreshes==1&&acknowledged==1);
     coordinator.stopping=YES; [coordinator requestReconcile]; RunFor(.12);
@@ -3982,38 +4096,40 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
     NSMutableDictionary *externalGeometry=[CRDReadConfig(nil) mutableCopy]; externalGeometry[@"placement"]=@"bottom"; externalGeometry[@"width"]=@515;
     CRDWriteConfig(externalGeometry,nil); CRDReload(); RunFor(.2);
     check(@"external_configuration_wins_over_pending_geometry",!geometryDirty&&[CRDReadConfig(nil)[@"placement"] isEqual:@"bottom"]&&[CRDReadConfig(nil)[@"width"] isEqual:@515]);
-    // A scratch-only competing writer holds the lock for 600 ms. The delayed unlock bounds
-    // the fixture even if a lock attempt blocks unexpectedly.
-    auto holdConfigLock=[&]() -> dispatch_semaphore_t {
+    // Hold a scratch-only writer until the contended retry has been observed. The deadline
+    // also releases it if a broken lock attempt blocks the test's main thread.
+    auto holdConfigLock=[&]() -> dispatch_block_t {
         int fd=open([CRDConfigPath() stringByAppendingPathExtension:@"lock"].fileSystemRepresentation,O_RDWR|O_CLOEXEC);
         NSCAssert(fd>=0&&flock(fd,LOCK_EX)==0,@"Fixture lock must be held");
-        dispatch_semaphore_t released=dispatch_semaphore_create(0);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,600*NSEC_PER_MSEC),dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
+        dispatch_semaphore_t release=dispatch_semaphore_create(0),released=dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
+            dispatch_semaphore_wait(release,dispatch_time(DISPATCH_TIME_NOW,3*NSEC_PER_SEC));
             flock(fd,LOCK_UN); close(fd); dispatch_semaphore_signal(released);
         });
-        return released;
+        return ^{ dispatch_semaphore_signal(release); dispatch_semaphore_wait(released,DISPATCH_TIME_FOREVER); };
     };
     auto markUserGeometry=[&] {
         BeginUserGeometry(overlay.controller.window);
         [overlay.controller.window setFrameOrigin:NSMakePoint(NSMinX(visible)+80,NSMinY(visible)+90)];
         SaveGeometry(overlay); EndUserGeometry();
     };
-    resetGeometry(@"center"); RunFor(.2); markUserGeometry();
-    dispatch_semaphore_t saveLock=holdConfigLock();
+    resetGeometry(@"center"); RunUntil(2,^BOOL{ return !reloadPending&&!coordinator.pending; }); markUserGeometry();
+    dispatch_block_t releaseSaveLock=holdConfigLock();
     NSTimeInterval saveStart=NSProcessInfo.processInfo.systemUptime; PersistGeometry(overlay);
     NSTimeInterval saveDelay=NSProcessInfo.processInfo.systemUptime-saveStart;
     NSRect capturedFrame=geometryFrame;
     [overlay.controller.window setContentSize:NSMakeSize(NSWidth(capturedFrame)+30,NSHeight(capturedFrame)+20)];
-    RunFor(.3); // Let the original debounce and contended retries run before the lock releases.
+    NSUInteger contendedGeneration=geometryGeneration;
+    RunUntil(2,^BOOL{ return geometryGeneration>contendedGeneration&&!systemResizeRevertPending; });
     BOOL retainedWhileBusy=geometryDirty&&[CRDReadConfig(nil)[@"placement"] isEqual:@"center"];
     check(@"busy_user_save_survives_system_resize_without_saving_the_system_frame",retainedWhileBusy&&NSEqualRects(overlay.controller.window.frame,capturedFrame));
-    dispatch_semaphore_wait(saveLock,DISPATCH_TIME_FOREVER); RunFor(.25);
+    releaseSaveLock(); RunUntil(2,^BOOL{ return !geometryDirty; });
     check(@"busy_geometry_save_returns_without_waiting_and_retries_captured_frame",saveDelay<.2&&retainedWhileBusy&&!geometryDirty&&
         [CRDReadConfig(nil)[@"placement"] isEqual:@"custom"]&&[CRDReadConfig(nil)[@"x"] isEqual:@80]);
     measurements[@"busyGeometrySaveSeconds"]=@(saveDelay);
     NSString *afterRetrySignature=FileSignature(); NSUInteger afterRetryReads=configReadCount; RunFor(.35);
     check(@"geometry_retry_stops_when_saved",[FileSignature() isEqual:afterRetrySignature]&&configReadCount==afterRetryReads);
-    resetGeometry(@"center"); RunFor(.2); markUserGeometry();
+    resetGeometry(@"center"); RunUntil(2,^BOOL{ return !reloadPending&&!coordinator.pending; }); markUserGeometry();
     coordinator.original=(id)fakeApp; coordinator.originalBirth=fixtureBirth;
     coordinator.applicationElement=@"fixture-application"; coordinator.trusted=YES;
     SetOriginalHidden(coordinator,YES);
@@ -4030,11 +4146,11 @@ static int OverlaySelfTest(NSDictionary *(*permissionOptions)(int,const char *co
         }
         return savedAXWrite(element,value);
     };
-    dispatch_semaphore_t exitLock=holdConfigLock(); NSString *beforeExit=FileSignature();
+    dispatch_block_t releaseExitLock=holdConfigLock(); NSString *beforeExit=FileSignature();
     NSTimeInterval exitStart=NSProcessInfo.processInfo.systemUptime; [coordinator cleanExit];
     NSTimeInterval exitDelay=NSProcessInfo.processInfo.systemUptime-exitStart;
     BOOL stoppedBeforeUnlock=exitDelay<.2&&!hidden&&!coordinator.ownsHidden&&restoredWithLockHeld;
-    dispatch_semaphore_wait(exitLock,DISPATCH_TIME_FOREVER); RunFor(.25);
+    releaseExitLock(); RunFor(.25);
     check(@"shutdown_restores_before_optional_persistence_even_with_config_lock_held",restoredBeforePersistence&&restoredWithLockHeld&&restoreAt-exitStart<.2);
     check(@"shutdown_lock_attempt_is_bounded_and_leaves_no_geometry_retry",stoppedBeforeUnlock&&!geometryDirty&&[FileSignature() isEqual:beforeExit]);
     measurements[@"shutdownRestoreSeconds"]=@(restoreAt-exitStart); measurements[@"shutdownWithBusyLockSeconds"]=@(exitDelay);

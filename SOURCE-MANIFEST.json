@@ -16,9 +16,9 @@
       "sha256": "05066236ecce98e62ba3269e303df4cb8dea9bd59f7ed1569553e5f6b375330c"
     },
     "CHANGELOG.md": {
-      "bytes": 2034,
+      "bytes": 2185,
       "executable": false,
-      "sha256": "c1ab86977fb5aefc8f527452abbd5f1a257fcc8c17de258f27779a43007a7e32"
+      "sha256": "9d243c966a93354f145c1469f99fa3603aa035b103f59159895a02a300efa5cb"
     },
     "CONTRIBUTING.md": {
       "bytes": 1944,
@@ -331,9 +331,9 @@
       "sha256": "98180afa257ec48ad74c24834a77298119701e36111b6846416bc4ffbf40b859"
     },
     "backend/OverlayMain.mm": {
-      "bytes": 328257,
+      "bytes": 337923,
       "executable": false,
-      "sha256": "c1b2546959147f25acf1341250188766ec208cf555fca5527e452a7347abbbda"
+      "sha256": "88ba831b6f20e6d0cd7507427c9d5ca4cfdaf2ce0b5d5f0f8498fca1cc969564"
     },
     "config/custom.json": {
       "bytes": 679,
